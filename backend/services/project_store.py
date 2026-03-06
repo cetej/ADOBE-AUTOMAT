@@ -1,0 +1,84 @@
+"""CRUD operace pro projekty ulozene jako JSON soubory."""
+
+import sys
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+import json
+import re
+from datetime import datetime
+from pathlib import Path
+
+from config import PROJECTS_DIR
+from models import Project, ProjectCreate, ProjectPhase, ProjectType
+
+
+def _slugify(text: str) -> str:
+    """Prevede text na bezpecny identifikator."""
+    slug = text.lower().strip()
+    slug = re.sub(r"[^\w\s-]", "", slug)
+    slug = re.sub(r"[\s_]+", "-", slug)
+    return slug[:64]
+
+
+def _project_path(project_id: str) -> Path:
+    return PROJECTS_DIR / f"{project_id}.json"
+
+
+def list_projects() -> list[Project]:
+    """Vrati seznam vsech projektu."""
+    projects = []
+    for f in sorted(PROJECTS_DIR.glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            projects.append(Project(**data))
+        except Exception:
+            continue
+    return projects
+
+
+def get_project(project_id: str) -> Project | None:
+    """Nacte projekt podle ID."""
+    path = _project_path(project_id)
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return Project(**data)
+
+
+def create_project(req: ProjectCreate) -> Project:
+    """Vytvori novy projekt."""
+    project_id = _slugify(req.name)
+    # Zajistit unikatnost
+    base_id = project_id
+    counter = 1
+    while _project_path(project_id).exists():
+        project_id = f"{base_id}-{counter}"
+        counter += 1
+
+    project = Project(
+        id=project_id,
+        name=req.name,
+        type=req.type,
+        source_file=req.source_file,
+    )
+    save_project(project)
+    return project
+
+
+def save_project(project: Project) -> None:
+    """Ulozi projekt na disk."""
+    project.updated_at = datetime.now().isoformat()
+    path = _project_path(project.id)
+    path.write_text(
+        project.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+
+def delete_project(project_id: str) -> bool:
+    """Smaze projekt."""
+    path = _project_path(project_id)
+    if path.exists():
+        path.unlink()
+        return True
+    return False

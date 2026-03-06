@@ -1,0 +1,28 @@
+# Runtime data
+data/
+__pycache__/
+*.pyc
+
+# Frontend build
+frontend/dist/
+frontend/node_modules/
+
+# Backend venv
+backend/.venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project data
+input/
+output/
+
+# Env
+.env
+*.env.local
