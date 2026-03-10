@@ -24,6 +24,44 @@
     loading = '';
   }
 
+  async function exportXlsx() {
+    loading = 'xlsx';
+    try {
+      const res = await fetch(`/api/projects/${$currentProject.id}/export/xlsx`, { method: 'POST' });
+      if (!res.ok) throw new Error('Export selhal');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${$currentProject.id}_translations.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      notify('Excel exportovan', 'success');
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+    loading = '';
+  }
+
+  async function exportXlsxGrouped() {
+    loading = 'xlsx-grouped';
+    try {
+      const res = await fetch(`/api/projects/${$currentProject.id}/export/xlsx-grouped`, { method: 'POST' });
+      if (!res.ok) throw new Error('Export selhal');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${$currentProject.id}_grouped.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      notify('Excel (podle kategorii) exportovan', 'success');
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+    loading = '';
+  }
+
   async function exportJson() {
     loading = 'json';
     try {
@@ -71,6 +109,34 @@
           onclick={exportCsv}
         >
           {loading === 'csv' ? 'Stahuji...' : 'Stahnout CSV'}
+        </button>
+      </div>
+
+      <div class="bg-white rounded-lg border border-gray-200 p-4 flex items-center justify-between">
+        <div>
+          <div class="font-medium text-gray-900 text-sm">Excel tabulka (XLSX)</div>
+          <div class="text-xs text-gray-500">Formatovany Excel s hlavickou a sloupci</div>
+        </div>
+        <button
+          class="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition-colors disabled:opacity-50"
+          disabled={loading === 'xlsx' || translated === 0}
+          onclick={exportXlsx}
+        >
+          {loading === 'xlsx' ? 'Stahuji...' : 'Stahnout Excel'}
+        </button>
+      </div>
+
+      <div class="bg-white rounded-lg border border-gray-200 p-4 flex items-center justify-between">
+        <div>
+          <div class="font-medium text-gray-900 text-sm">Excel podle kategorii</div>
+          <div class="text-xs text-gray-500">Mesta, reky, kontinenty... seskupene po typech</div>
+        </div>
+        <button
+          class="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition-colors disabled:opacity-50"
+          disabled={loading === 'xlsx-grouped' || translated === 0}
+          onclick={exportXlsxGrouped}
+        >
+          {loading === 'xlsx-grouped' ? 'Stahuji...' : 'Stahnout Excel'}
         </button>
       </div>
 

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["translate"])
 
 
-@router.put("/api/projects/{project_id}/texts/{text_id}")
+@router.put("/api/projects/{project_id}/texts/{text_id:path}")
 async def api_update_text(project_id: str, text_id: str, update: TextUpdate):
     """Aktualizuje jeden textovy element."""
     project = get_project(project_id)

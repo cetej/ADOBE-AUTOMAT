@@ -1,18 +1,45 @@
 <script>
-  import { currentProject, currentPage } from '../stores/project.js';
+  import { currentProject } from '../stores/project.js';
   import { notify } from '../stores/notifications.js';
   import { api } from '../lib/api.js';
+  import { navigate } from '../stores/router.js';
   import FileUpload from '../components/FileUpload.svelte';
-
-  let { navigate } = $props();
-
-  function go(target) {
-    window.location.hash = target;
-    currentPage.set(target);
-  }
 
   let extracting = $state(false);
   let progress = $state(0);
+  let aiDoc = $state(null);
+  let aiDocLoading = $state(false);
+
+  // Nacti aktivni dokument z Illustratoru
+  async function loadActiveDoc() {
+    aiDocLoading = true;
+    try {
+      const res = await fetch('/api/illustrator/status');
+      const data = await res.json();
+      if (data.connected && data.documents) {
+        // Proxy format: documents.response.content[0].text = JSON string s polem dokumentu
+        let docs = [];
+        try {
+          const textContent = data.documents?.response?.content?.[0]?.text;
+          if (textContent) docs = JSON.parse(textContent);
+        } catch { /* fallback */ }
+        if (!docs.length) docs = data.documents?.response?.documents || data.documents?.documents || [];
+        aiDoc = docs.length > 0 ? docs[0] : { name: '(zadny dokument)' };
+      } else {
+        aiDoc = null;
+      }
+    } catch {
+      aiDoc = null;
+    }
+    aiDocLoading = false;
+  }
+
+  // Auto-load pri zobrazeni MAP projektu
+  $effect(() => {
+    if ($currentProject?.type === 'map') {
+      loadActiveDoc();
+    }
+  });
 
   // IDML state
   let uploadingIdml = $state(false);
@@ -37,7 +64,7 @@
       const result = await api.extract($currentProject.id);
       currentProject.set(result);
       notify(`Extrahovano ${result.elements?.length || 0} textu`, 'success');
-      go('editor');
+      navigate('editor');
     } catch (e) {
       notify('Chyba extrakce: ' + e.message, 'error');
     } finally {
@@ -83,7 +110,7 @@
       const result = await api.extract($currentProject.id);
       currentProject.set(result);
       notify(`Extrahovano ${result.elements?.length || 0} textu z IDML`, 'success');
-      go('editor');
+      navigate('editor');
     } catch (e) {
       notify('Chyba extrakce IDML: ' + e.message, 'error');
     } finally {
@@ -100,19 +127,56 @@
 
   {:else if $currentProject.type === 'map'}
     <!-- MAP: Illustrator extraction -->
-    <div class="bg-white rounded-xl border border-gray-200 p-8 text-center">
-      <div class="text-4xl mb-4">&#x1F5FA;</div>
-      <h2 class="text-lg font-semibold mb-2">MAP: Extrakce z Illustratoru</h2>
-      <p class="text-sm text-gray-500 mb-6">
-        Ujistete se, ze je Illustrator otevreny s pozadovanym dokumentem a CEP plugin je pripojeny.
-      </p>
-      <button
-        class="px-6 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
-        onclick={startExtraction}
-        disabled={extracting}
-      >
-        {extracting ? 'Extrahuji...' : 'Spustit extrakci'}
-      </button>
+    <div class="bg-white rounded-xl border border-gray-200 p-8">
+      <div class="text-center">
+        <div class="text-4xl mb-4">&#x1F5FA;</div>
+        <h2 class="text-lg font-semibold mb-4">MAP: Extrakce z Illustratoru</h2>
+      </div>
+
+      <!-- Illustrator connection status -->
+      <div class="mb-6 p-4 rounded-lg border {aiDoc ? 'bg-green-50 border-green-200' : 'bg-orange-50 border-orange-200'}">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <span class="w-3 h-3 rounded-full {aiDoc ? 'bg-green-500' : aiDocLoading ? 'bg-yellow-400 animate-pulse' : 'bg-red-400'}"></span>
+            {#if aiDocLoading}
+              <span class="text-sm text-gray-600">Pripojuji k Illustratoru...</span>
+            {:else if aiDoc}
+              <div>
+                <span class="text-sm font-medium text-green-800">Pripojeno</span>
+                <p class="text-sm text-green-700 font-semibold">{aiDoc.name}</p>
+              </div>
+            {:else}
+              <div>
+                <span class="text-sm font-medium text-orange-800">Nepripojeno</span>
+                <p class="text-xs text-orange-600">Oteviete Illustrator s dokumentem a spustte proxy.</p>
+              </div>
+            {/if}
+          </div>
+          <button
+            class="text-xs px-3 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 transition-colors disabled:opacity-50"
+            onclick={loadActiveDoc}
+            disabled={aiDocLoading}
+          >
+            {aiDocLoading ? '...' : 'Obnovit'}
+          </button>
+        </div>
+      </div>
+
+      <div class="text-center">
+        {#if $currentProject.elements?.length > 0}
+          <p class="text-xs text-orange-500 mb-3">Projekt jiz obsahuje {$currentProject.elements.length} textu. Nova extrakce je prepise.</p>
+        {/if}
+        <button
+          class="px-6 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+          onclick={startExtraction}
+          disabled={extracting || !aiDoc}
+        >
+          {extracting ? 'Extrahuji...' : $currentProject.elements?.length > 0 ? 'Znovu extrahovat' : 'Spustit extrakci'}
+        </button>
+        {#if !aiDoc && !aiDocLoading}
+          <p class="text-xs text-orange-500 mt-2">Nejprve pripojte Illustrator</p>
+        {/if}
+      </div>
       {#if extracting}
         <div class="mt-4">
           <div class="w-full bg-gray-200 rounded-full h-2">
@@ -134,10 +198,16 @@
             <span class="ml-auto text-green-600 text-sm font-medium">Nahrano</span>
           {/if}
         </div>
-        {#if idmlUploaded}
-          <p class="text-sm text-green-600">
-            Soubor: {$currentProject.idml_path?.split('/').pop() || 'nahran'}
-          </p>
+        {#if idmlUploaded && !uploadingIdml}
+          <div class="flex items-center justify-between">
+            <p class="text-sm text-green-600">
+              Soubor: {$currentProject.idml_path?.split('/').pop() || 'nahran'}
+            </p>
+            <button
+              class="text-xs text-blue-600 hover:text-blue-800 underline"
+              onclick={() => { idmlUploaded = false; }}
+            >Zmenit soubor</button>
+          </div>
         {:else}
           <FileUpload
             accept=".idml"
@@ -157,10 +227,16 @@
             <span class="ml-auto text-green-600 text-sm font-medium">Nahrano</span>
           {/if}
         </div>
-        {#if translationUploaded}
-          <p class="text-sm text-green-600">
-            Soubor: {$currentProject.translation_doc?.split('/').pop() || 'nahran'}
-          </p>
+        {#if translationUploaded && !uploadingTranslation}
+          <div class="flex items-center justify-between">
+            <p class="text-sm text-green-600">
+              Soubor: {$currentProject.translation_doc?.split('/').pop() || 'nahran'}
+            </p>
+            <button
+              class="text-xs text-blue-600 hover:text-blue-800 underline"
+              onclick={() => { translationUploaded = false; }}
+            >Zmenit soubor</button>
+          </div>
         {:else}
           <FileUpload
             accept=".docx,.doc,.txt,.rtf"

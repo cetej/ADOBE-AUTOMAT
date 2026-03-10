@@ -180,10 +180,7 @@ async def api_upload_translation(project_id: str, file: UploadFile = File(...)):
             from services.docx_matcher import match_docx_to_idml
 
             docx_result = parse_docx(dest)
-            match_result = match_docx_to_idml(
-                project.elements, docx_result,
-                page_min=44, page_max=77,
-            )
+            match_result = match_docx_to_idml(project.elements, docx_result)
             logger.info("DOCX matching: %d/%d stories, %d/%d elements s CZ",
                         match_result.matched_stories, match_result.total_stories,
                         match_result.elements_with_czech, match_result.total_elements)

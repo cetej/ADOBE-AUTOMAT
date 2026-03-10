@@ -1,21 +1,118 @@
 <script>
   import { api } from '../lib/api.js';
-  import { projectList, currentProject, currentPage } from '../stores/project.js';
+  import { projectList, currentProject } from '../stores/project.js';
   import { notify } from '../stores/notifications.js';
-  import ProjectTypeSelect from '../components/ProjectTypeSelect.svelte';
+  import { navigate } from '../stores/router.js';
 
-  let { navigate } = $props();
+  let loading = $state(false);
+  let loadingMsg = $state('');
+  let dragOver = $state(false);
 
-  function go(target) {
-    window.location.hash = target;
-    currentPage.set(target);
+  // === Drop zone: hodis soubor, vytvori projekt, nahraje, extrahuje ===
+  function handleDragOver(e) {
+    e.preventDefault();
+    dragOver = true;
+  }
+  function handleDragLeave() {
+    dragOver = false;
   }
 
-  let showCreate = $state(false);
-  let newName = $state('');
-  let newType = $state('map');
-  let loading = $state(false);
+  async function handleDrop(e) {
+    e.preventDefault();
+    dragOver = false;
+    const file = e.dataTransfer?.files?.[0];
+    if (file) await processFile(file);
+  }
 
+  function handleFileSelect(e) {
+    const file = e.target.files?.[0];
+    if (file) processFile(file);
+  }
+
+  async function processFile(file) {
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    const name = file.name.replace(/\.\w+$/, '');
+
+    if (ext === 'idml') {
+      await quickStartIdml(name, file);
+    } else if (ext === 'ai') {
+      await quickStartMap(name);
+    } else {
+      notify('Nepodporovany format. Pouzijte .idml nebo .ai soubor.', 'error');
+    }
+  }
+
+  async function quickStartIdml(name, file) {
+    loading = true;
+    try {
+      loadingMsg = 'Vytvarim projekt...';
+      const project = await api.createProject({ name, type: 'idml' });
+
+      loadingMsg = 'Nahravam IDML...';
+      const withFile = await api.uploadIdml(project.id, file);
+
+      loadingMsg = 'Extrahuji texty...';
+      const extracted = await api.extract(project.id);
+
+      currentProject.set(extracted);
+      notify(`${extracted.elements?.length || 0} textu extrahovano z ${file.name}`, 'success');
+      navigate('editor');
+    } catch (e) {
+      notify('Chyba: ' + e.message, 'error');
+    } finally {
+      loading = false;
+      loadingMsg = '';
+    }
+  }
+
+  async function quickStartMap(name) {
+    loading = true;
+    try {
+      loadingMsg = 'Vytvarim MAP projekt...';
+      const project = await api.createProject({ name, type: 'map' });
+      currentProject.set(project);
+      notify(`MAP projekt "${name}" vytvoren`, 'success');
+      navigate('extractor');
+    } catch (e) {
+      notify('Chyba: ' + e.message, 'error');
+    } finally {
+      loading = false;
+      loadingMsg = '';
+    }
+  }
+
+  // === MAP z Illustratoru (bez souboru) ===
+  let aiDoc = $state(null);
+  let aiDocLoading = $state(false);
+
+  async function loadActiveDoc() {
+    aiDocLoading = true;
+    aiDoc = null;
+    try {
+      const res = await fetch('/api/illustrator/status');
+      const data = await res.json();
+      if (data.connected && data.documents) {
+        let docs = [];
+        try {
+          const textContent = data.documents?.response?.content?.[0]?.text;
+          if (textContent) docs = JSON.parse(textContent);
+        } catch { /* fallback */ }
+        if (!docs.length) docs = data.documents?.response?.documents || data.documents?.documents || [];
+        if (docs.length > 0) aiDoc = docs[0];
+      }
+    } catch {
+      aiDoc = null;
+    }
+    aiDocLoading = false;
+  }
+
+  async function quickStartFromIllustrator() {
+    if (!aiDoc?.name) return;
+    const name = aiDoc.name.replace(/\.ai$/i, '');
+    await quickStartMap(name);
+  }
+
+  // === Projekty ===
   async function loadProjects() {
     try {
       const data = await api.listProjects();
@@ -25,29 +122,12 @@
     }
   }
 
-  async function createProject() {
-    if (!newName.trim()) return;
-    loading = true;
-    try {
-      const project = await api.createProject({ name: newName.trim(), type: newType });
-      notify(`Projekt "${project.name}" vytvoren`, 'success');
-      showCreate = false;
-      newName = '';
-      currentProject.set(project);
-      go('extractor');
-    } catch (e) {
-      notify('Chyba: ' + e.message, 'error');
-    } finally {
-      loading = false;
-    }
-  }
-
   async function openProject(project) {
     try {
       const full = await api.getProject(project.id);
       currentProject.set(full);
       const hasTexts = full.elements && full.elements.length > 0;
-      go(hasTexts ? 'editor' : 'extractor');
+      navigate(hasTexts ? 'editor' : 'extractor');
     } catch (e) {
       notify('Chyba: ' + e.message, 'error');
     }
@@ -64,54 +144,67 @@
     }
   }
 
-  // Nacist projekty pri zobrazeni
   loadProjects();
+  loadActiveDoc();
 </script>
 
 <div class="max-w-4xl mx-auto">
-  <div class="flex items-center justify-between mb-6">
-    <h1 class="text-2xl font-bold text-gray-900">Projekty</h1>
-    <button
-      class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
-      onclick={() => (showCreate = true)}
-    >
-      + Novy projekt
-    </button>
-  </div>
+  <h1 class="text-2xl font-bold text-gray-900 mb-6">Projekty</h1>
 
-  <!-- Create dialog -->
-  {#if showCreate}
-    <div class="bg-white rounded-xl border border-gray-200 p-6 mb-6 shadow-sm">
-      <h2 class="text-lg font-semibold mb-4">Novy projekt</h2>
-      <div class="space-y-4">
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Nazev projektu</label>
-          <input
-            type="text"
-            bind:value={newName}
-            placeholder="napr. Byzantine Empire AD 717"
-            class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            onkeydown={(e) => e.key === 'Enter' && createProject()}
-          />
+  <!-- Drop zone -->
+  {#if loading}
+    <div class="bg-blue-50 border-2 border-blue-300 rounded-xl p-10 mb-6 text-center">
+      <div class="animate-spin inline-block w-8 h-8 border-3 border-blue-600 border-t-transparent rounded-full mb-3"></div>
+      <p class="text-blue-700 font-medium">{loadingMsg}</p>
+    </div>
+  {:else}
+    <div
+      class="border-2 border-dashed rounded-xl p-8 mb-6 text-center transition-colors
+             {dragOver ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-white hover:border-gray-400'}"
+      ondragover={handleDragOver}
+      ondragleave={handleDragLeave}
+      ondrop={handleDrop}
+      role="region"
+      aria-label="File upload area"
+    >
+      <p class="text-lg font-medium text-gray-700 mb-1">Pretahnete soubor sem</p>
+      <p class="text-sm text-gray-400 mb-4">.idml (InDesign) nebo .ai (Illustrator mapa)</p>
+      <label class="inline-block px-5 py-2.5 bg-blue-600 text-white rounded-lg cursor-pointer hover:bg-blue-700 text-sm font-medium transition-colors">
+        Vybrat soubor
+        <input
+          type="file"
+          accept=".idml,.ai"
+          onchange={handleFileSelect}
+          class="hidden"
+        />
+      </label>
+    </div>
+
+    <!-- MAP z Illustratoru -->
+    <div class="bg-white rounded-xl border border-gray-200 p-4 mb-6">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <span class="w-3 h-3 rounded-full {aiDoc ? 'bg-green-500' : aiDocLoading ? 'bg-yellow-400 animate-pulse' : 'bg-gray-300'}"></span>
+          {#if aiDocLoading}
+            <span class="text-sm text-gray-500">Hledam Illustrator...</span>
+          {:else if aiDoc}
+            <span class="text-sm text-gray-700">Illustrator: <strong>{aiDoc.name}</strong></span>
+          {:else}
+            <span class="text-sm text-gray-400">Illustrator nepripojen</span>
+          {/if}
         </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-2">Typ projektu</label>
-          <ProjectTypeSelect bind:value={newType} />
-        </div>
-        <div class="flex gap-2 justify-end">
+        <div class="flex items-center gap-2">
           <button
-            class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
-            onclick={() => (showCreate = false)}
-          >
-            Zrusit
-          </button>
-          <button
-            class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-            onclick={createProject}
-            disabled={loading || !newName.trim()}
-          >
-            {loading ? 'Vytvari se...' : 'Vytvorit'}
-          </button>
+            class="text-xs text-gray-500 hover:text-gray-700 underline"
+            onclick={loadActiveDoc}
+            disabled={aiDocLoading}
+          >Obnovit</button>
+          {#if aiDoc}
+            <button
+              class="px-4 py-1.5 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
+              onclick={quickStartFromIllustrator}
+            >Extrahovat mapu</button>
+          {/if}
         </div>
       </div>
     </div>
@@ -119,10 +212,8 @@
 
   <!-- Project list -->
   {#if $projectList.length === 0}
-    <div class="text-center py-16 text-gray-500">
-      <div class="text-4xl mb-3">&#x1F4C1;</div>
-      <p class="text-lg">Zadne projekty</p>
-      <p class="text-sm mt-1">Vytvorte novy projekt tlacitkem vyse.</p>
+    <div class="text-center py-10 text-gray-400">
+      <p class="text-sm">Zatim zadne projekty.</p>
     </div>
   {:else}
     <div class="space-y-2">

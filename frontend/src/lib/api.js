@@ -64,7 +64,7 @@ export const api = {
 
   // Texts
   updateText: (projectId, textId, data) =>
-    request('PUT', `/projects/${projectId}/texts/${textId}`, data),
+    request('PUT', `/projects/${projectId}/texts/${encodeURIComponent(textId)}`, data),
   bulkUpdateTexts: (projectId, data) =>
     request('PATCH', `/projects/${projectId}/texts/bulk`, data),
 
@@ -78,7 +78,11 @@ export const api = {
   // Export
   exportFile: (id, format) => request('POST', `/projects/${id}/export/${format}`),
 
-  // Writeback
+  // Writeback (IDML)
   writeback: (id) => request('POST', `/projects/${id}/writeback`),
   writebackPreview: (id) => request('POST', `/projects/${id}/writeback/preview`),
+
+  // Writeback (MAP → Illustrator)
+  writebackMap: (id) => request('POST', `/projects/${id}/writeback-map`),
+  writebackMapPreview: (id) => request('POST', `/projects/${id}/writeback-map/preview`),
 };

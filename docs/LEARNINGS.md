@@ -4,6 +4,39 @@ Poučení z vývoje. Nejnovější záznamy nahoře.
 
 ---
 
+## 2026-03-07 — ExtendScript: Deep textFrames collection
+
+### layer.textFrames je HLUBOKÁ kolekce
+- **Problém**: `layer.textFrames` v Illustratoru vrací textové rámce ze VŠECH podvrstev, ne jen přímé potomky
+- **Důsledek**: Extrakce indexovala i texty z podvrstev → writeback nemohl najít indexy (7 chyb na Vikings mapě)
+- **Řešení**: `isDirectChild(tf, layer)` — walker parent chainu, vrací true jen pro přímé potomky
+- **Pravidlo**: V extract_texts.jsx i write_texts.jsx VŽDY filtrovat přes `isDirectChild()`, sublayery zpracovat rekurzivně
+
+---
+
+## 2026-03-07 — MAP Writeback: Adaptivní dávkování
+
+### Fixní BATCH_SIZE nestačí pro různé typy map
+- **Problém**: Mapy s dlouhými texty (legendy, články) mohou překročit ExtendScript string limit
+- **Řešení**: `_make_batches()` v `map_writeback.py` — akumuluje položky do dávky podle:
+  - MAX_BATCH_BYTES = 50 KB (velikost JSON payloadu)
+  - MAX_BATCH_ITEMS = 30 (horní limit počtu)
+  - Co přijde dřív → nová dávka
+- **Výhoda**: Krátké popisky map = velké dávky (30), dlouhé texty = automaticky menší dávky
+
+---
+
+## 2026-03-07 — Dashboard: Drag-and-drop UX
+
+### Jeden krok místo průvodce
+- **Problém**: Vícekrokový dialog (typ → jméno → soubor → extrakce) byl nepraktický
+- **Řešení**: Drop .idml → auto-create projekt + upload + extrakce + navigace do editoru
+- Drop .ai → create MAP projekt + navigace do extractoru
+- Illustrator status bar s tlačítkem "Extrahovat mapu"
+- **Pravidlo**: Minimalizovat kroky pro uživatele, automatizovat co jde
+
+---
+
 ## 2026-03-06 — IDML Writeback: Whitespace + Apostrophe Bug
 
 ### Extrakce `.strip()` vs XML whitespace

@@ -65,6 +65,18 @@ taskkill /PID <číslo> /F
 
 ---
 
+## Illustrator writeback — Text index out of range
+
+**Příznaky**: Chyby typu `Text index out of range (9 direct frames)` při zápisu.
+
+**Příčina**: `layer.textFrames` je hluboká kolekce — zahrnuje i texty z podvrstev. Extrakce indexovala sublayer texty pod parent vrstvou, writeback je pak nemohl najít.
+
+**Řešení**: `isDirectChild(tf, layer)` v extract_texts.jsx i write_texts.jsx — filtruje jen přímé potomky, sublayery se zpracují rekurzivně.
+
+**Prevence**: Vždy kontrolovat konzistenci indexování mezi extrakcí a zápisem.
+
+---
+
 ## Illustrator texty — nefunguje matchování
 
 **Příznaky**: `tf.contents === original` nefinduje shodu.

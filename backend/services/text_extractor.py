@@ -74,14 +74,20 @@ def raw_to_elements(raw_layers: list[dict]) -> list[TextElement]:
         list[TextElement]: Plochy seznam vsech textovych elementu.
     """
     elements = []
+    seen_ids = set()
     for layer in raw_layers:
         layer_name = layer.get("layerName", "Unknown")
+        layer_id = layer.get("layerId", 0)
         for text in layer.get("texts", []):
             contents = text.get("contents", "").strip()
             if not contents:
                 continue
 
             elem_id = f"{layer_name}/{text.get('index', 0)}"
+            # Deduplikace — vrstvy se stejnym jmenem dostanou layerId suffix
+            if elem_id in seen_ids:
+                elem_id = f"{layer_name}#{layer_id}/{text.get('index', 0)}"
+            seen_ids.add(elem_id)
             elements.append(TextElement(
                 id=elem_id,
                 contents=contents,

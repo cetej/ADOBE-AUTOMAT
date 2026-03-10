@@ -17,6 +17,8 @@
   let saving = $state(false);
   let translating = $state(false);
   let translateProgress = $state('');
+  let uploadingTranslation = $state(false);
+  let dragOverTranslation = $state(false);
 
   // Unikatni vrstvy, kategorie, statusy pro filtry
   let layers = $derived([...new Set(($currentProject?.elements || []).map(e => e.layer_name).filter(Boolean))].sort());
@@ -153,6 +155,42 @@
     }
   }
 
+  // === Nahrani prekladu (DOCX) ===
+  function isTranslationFile(file) {
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    return ['docx', 'doc', 'txt', 'rtf'].includes(ext);
+  }
+
+  async function uploadTranslationFile(file) {
+    if (!$currentProject || !isTranslationFile(file)) {
+      notify('Nepodporovany format. Pouzijte .docx, .doc, .txt nebo .rtf', 'error');
+      return;
+    }
+    uploadingTranslation = true;
+    try {
+      const result = await api.uploadTranslation($currentProject.id, file);
+      currentProject.set(result);
+      const matched = result.elements?.filter(e => e.czech)?.length || 0;
+      notify(`Preklad nahran: ${matched} textu sparovano z ${file.name}`, 'success');
+    } catch (e) {
+      notify('Chyba nahrani prekladu: ' + e.message, 'error');
+    } finally {
+      uploadingTranslation = false;
+    }
+  }
+
+  function handleTranslationDrop(e) {
+    e.preventDefault();
+    dragOverTranslation = false;
+    const file = e.dataTransfer?.files?.[0];
+    if (file) uploadTranslationFile(file);
+  }
+
+  function handleTranslationSelect(e) {
+    const file = e.target.files?.[0];
+    if (file) uploadTranslationFile(file);
+  }
+
   function handleKeydown(e, el) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -192,6 +230,50 @@
       </div>
     </div>
 
+    <!-- Panel prekladu — IDML bez prekladu -->
+    {#if $currentProject?.type === 'idml' && $currentProject?.elements?.length > 0}
+      {@const hasTranslations = $currentProject.elements.some(e => e.czech)}
+      {#if !hasTranslations && !translating}
+        <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
+          <div class="flex items-center gap-4">
+            <div class="flex-1">
+              <p class="text-sm font-medium text-amber-800 mb-1">Texty nemaji preklad</p>
+              <p class="text-xs text-amber-600">Nahrejte .docx preklad nebo spustte AI preklad</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <!-- Drop zone pro preklad -->
+              {#if uploadingTranslation}
+                <span class="text-xs text-blue-600 animate-pulse">Nahravam...</span>
+              {:else}
+                <div
+                  class="relative"
+                  ondragover={(e) => { e.preventDefault(); dragOverTranslation = true; }}
+                  ondragleave={() => { dragOverTranslation = false; }}
+                  ondrop={handleTranslationDrop}
+                >
+                  <label class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg cursor-pointer transition-colors
+                    {dragOverTranslation ? 'bg-blue-200 text-blue-800 ring-2 ring-blue-400' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'}">
+                    Nahrat .docx preklad
+                    <input
+                      type="file"
+                      accept=".docx,.doc,.txt,.rtf"
+                      onchange={handleTranslationSelect}
+                      class="hidden"
+                    />
+                  </label>
+                </div>
+              {/if}
+              <span class="text-xs text-gray-400">nebo</span>
+              <button
+                onclick={() => translateAll(false)}
+                class="px-3 py-1.5 text-xs font-medium bg-violet-600 text-white rounded-lg hover:bg-violet-700 transition-colors"
+              >AI Preklad</button>
+            </div>
+          </div>
+        </div>
+      {/if}
+    {/if}
+
     {#if !$currentProject || !$currentProject.elements?.length}
       <div class="text-center py-16 text-gray-500">
         <p class="text-lg">Zadne texty k editaci</p>
@@ -222,7 +304,7 @@
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100">
-              {#each filtered as el, i (el.id)}
+              {#each filtered as el, i (el.id + '/' + i)}
                 <tr
                   class="hover:bg-blue-50/40 transition-colors {editingId === el.id ? 'bg-blue-50' : ''}"
                 >

@@ -152,20 +152,31 @@ def _compute_similarity(story: StoryBlock, section: DocxSection) -> float:
 def match_docx_to_idml(
     elements: list[TextElement],
     docx_result: DocxParseResult,
-    page_min: int = 44,
-    page_max: int = 77,
+    page_min: int | None = None,
+    page_max: int | None = None,
     min_confidence: float = 0.15,
 ) -> MatchResult:
     """Hlavní matching funkce. Páruje DOCX sekce s IDML stories.
 
     Strategie: greedy matching — pro každou IDML story najde nejlepší DOCX sekci.
     Každá sekce může být přiřazena max jedné story (1:1).
+
+    Pokud page_min/page_max nejsou zadány, pouzije vsechny sekce z DOCX.
     """
     stories = _group_stories(elements)
-    sections = get_all_filtered_sections(docx_result, page_min, page_max)
 
+    # Bez explicitniho rozsahu pouzij vsechny sekce
+    if page_min is not None and page_max is not None:
+        sections = get_all_filtered_sections(docx_result, page_min, page_max)
+    else:
+        sections = docx_result.sections
+    # Filtruj prazdne sekce
+    sections = [s for s in sections if s.paragraphs]
+
+    p_min = min((s.page_start for s in sections), default=0)
+    p_max = max((s.page_end for s in sections), default=0)
     logger.info("Matching: %d stories vs %d DOCX sections (str. %d-%d)",
-                len(stories), len(sections), page_min, page_max)
+                len(stories), len(sections), p_min, p_max)
 
     # Spočítat similarity matici
     scores: list[tuple[float, int, int]] = []  # (score, story_idx, section_idx)
