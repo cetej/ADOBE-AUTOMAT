@@ -1,0 +1,14 @@
+{
+  "eval_id": 1,
+  "eval_name": "fish-cloning-hero",
+  "prompt": "Potřebuju hero obrázek k článku o rybě Amazon molly, která se klonuje 100 000 let. /generate-image fish-has-cloned hero",
+  "assertions": [
+    {"name": "three-variants", "description": "Output contains 3 variants (A, B, C)"},
+    {"name": "english-prompts", "description": "Image prompts are in English"},
+    {"name": "word-count-30-50", "description": "Each prompt is 30-50 words"},
+    {"name": "aspect-ratio-3-2", "description": "Uses 3:2 aspect ratio for hero"},
+    {"name": "no-text-in-image", "description": "Specifies no text/logos in image"},
+    {"name": "visual-brief-used", "description": "References visual_brief data (scientific tone, water colors, fish subjects)"},
+    {"name": "thumbnail-validation", "description": "Performs thumbnail test (clear subject at small size)"}
+  ]
+}

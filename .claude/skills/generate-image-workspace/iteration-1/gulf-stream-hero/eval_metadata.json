@@ -1,0 +1,13 @@
+{
+  "eval_id": 3,
+  "eval_name": "gulf-stream-hero",
+  "prompt": "Udělej hero image pro článek o posunu Golfského proudu, slug je posun-o-50-kilometru. /generate-image posun-o-50 hero",
+  "assertions": [
+    {"name": "three-variants", "description": "Output contains 3 variants (A, B, C)"},
+    {"name": "english-prompts", "description": "Image prompts are in English"},
+    {"name": "word-count-30-50", "description": "Each prompt is 30-50 words"},
+    {"name": "aspect-ratio-3-2", "description": "Uses 3:2 aspect ratio for hero"},
+    {"name": "urgent-climate-tone", "description": "Reflects urgent/climate tone from visual brief"},
+    {"name": "thumbnail-validation", "description": "Performs thumbnail test validation"}
+  ]
+}

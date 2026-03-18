@@ -1,0 +1,13 @@
+{
+  "eval_id": 2,
+  "eval_name": "yellowstone-illustration",
+  "prompt": "Vygeneruj ilustraci k cestovnímu průvodci po Yellowstone. /generate-image yellowstone illustration",
+  "assertions": [
+    {"name": "three-variants", "description": "Output contains 3 variants (A, B, C)"},
+    {"name": "english-prompts", "description": "Image prompts are in English"},
+    {"name": "word-count-30-50", "description": "Each prompt is 30-50 words"},
+    {"name": "aspect-ratio-16-9", "description": "Uses 16:9 aspect ratio for illustration"},
+    {"name": "adventurous-tone", "description": "Reflects adventurous/nature tone from visual brief"},
+    {"name": "asks-user-choice", "description": "Asks user which variant to generate"}
+  ]
+}

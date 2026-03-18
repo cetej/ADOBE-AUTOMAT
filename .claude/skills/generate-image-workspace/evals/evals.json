@@ -1,0 +1,52 @@
+{
+  "skill_name": "generate-image",
+  "evals": [
+    {
+      "id": 1,
+      "name": "fish-cloning-hero",
+      "prompt": "Potřebuju hero obrázek k článku o rybě Amazon molly, která se klonuje 100 000 let. /generate-image fish-has-cloned hero",
+      "expected_output": "3 varianty promptů (A/B/C), anglicky, 30-50 slov, aspect 3:2, scientific tone, vodní tóny",
+      "files": [
+        "C:/Users/stock/Documents/000_NGM/NG-ROBOT/processed/2026-03-11_this-fish-has-cloned-itself-for-100000-years-scientists-just-figured-out-how/0_analysis.json"
+      ],
+      "assertions": [
+        {"name": "three-variants", "description": "Output contains 3 variants (A, B, C)", "type": "contains_all", "values": ["Varianta A", "Varianta B", "Varianta C"]},
+        {"name": "english-prompts", "description": "Prompts are in English, not Czech", "type": "regex", "pattern": "(?i)(dramatic|light|shot|scene|composition|texture)"},
+        {"name": "word-count-30-50", "description": "Each prompt is 30-50 words", "type": "custom", "check": "prompt_word_count_30_50"},
+        {"name": "aspect-ratio-hero", "description": "Uses 3:2 aspect ratio for hero", "type": "contains", "value": "3:2"},
+        {"name": "no-text-in-image", "description": "Specifies no text/logos in image", "type": "regex", "pattern": "(?i)(no.?text|no.?logo|no.?watermark|bez textu)"},
+        {"name": "visual-brief-used", "description": "References visual_brief data (tone, subjects)", "type": "regex", "pattern": "(?i)(scientific|molly|aqua|turquoise|water|fish)"}
+      ]
+    },
+    {
+      "id": 2,
+      "name": "yellowstone-illustration",
+      "prompt": "Vygeneruj ilustraci k cestovnímu průvodci po Yellowstone. /generate-image yellowstone illustration",
+      "expected_output": "3 varianty promptů, anglicky, 30-50 slov, aspect 16:9, adventurous tone, přírodní barvy",
+      "files": [
+        "C:/Users/stock/Documents/000_NGM/NG-ROBOT/processed/2026-03-11_yellowstone-national-park-travel-guide/0_analysis.json"
+      ],
+      "assertions": [
+        {"name": "three-variants", "description": "Output contains 3 variants (A, B, C)", "type": "contains_all", "values": ["Varianta A", "Varianta B", "Varianta C"]},
+        {"name": "aspect-ratio-illustration", "description": "Uses 16:9 aspect ratio for illustration", "type": "contains", "value": "16:9"},
+        {"name": "adventurous-tone", "description": "Reflects adventurous/nature tone from visual brief", "type": "regex", "pattern": "(?i)(geyser|thermal|bison|mountain|wilderness|yellowstone|old faithful|prismatic)"},
+        {"name": "asks-user-choice", "description": "Asks user which variant to generate", "type": "regex", "pattern": "(?i)(kter[yý]|vyber|zvol|A.?B.?C)"}
+      ]
+    },
+    {
+      "id": 3,
+      "name": "gulf-stream-no-visual-brief-fallback",
+      "prompt": "Udělej hero image pro článek o posunu Golfského proudu, slug je posun-o-50-kilometru. /generate-image posun-o-50 hero",
+      "expected_output": "3 varianty, urgent tone, oceánské barvy, 3:2 aspect. Skill by měl najít a využít visual_brief z 0_analysis.json.",
+      "files": [
+        "C:/Users/stock/Documents/000_NGM/NG-ROBOT/processed/2026-03-15_posun-o-50-kilometru-golfsky-proud-vydava-prvni-me/0_analysis.json"
+      ],
+      "assertions": [
+        {"name": "three-variants", "description": "Output contains 3 variants (A, B, C)", "type": "contains_all", "values": ["Varianta A", "Varianta B", "Varianta C"]},
+        {"name": "urgent-climate-tone", "description": "Reflects urgent/climate tone", "type": "regex", "pattern": "(?i)(ocean|current|gulf|stream|atlantic|climate|cobalt|ice)"},
+        {"name": "aspect-ratio-hero", "description": "Uses 3:2 for hero", "type": "contains", "value": "3:2"},
+        {"name": "thumbnail-validation", "description": "Mentions or performs thumbnail test validation", "type": "regex", "pattern": "(?i)(thumbnail|rozpoznatel|hlavní subjekt|0[.,]5)"}
+      ]
+    }
+  ]
+}

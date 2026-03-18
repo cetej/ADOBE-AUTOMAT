@@ -1,0 +1,35 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/checkpoint-check.sh",
+            "timeout": 5,
+            "statusMessage": "Checking checkpoint..."
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/memory-maintenance.sh",
+            "timeout": 5,
+            "statusMessage": "Checking memory health..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/scribe-reminder.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

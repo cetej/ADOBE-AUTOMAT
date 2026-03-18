@@ -1,0 +1,24 @@
+{
+  "expectations": [
+    {
+      "text": "Three variants (A, B, C)",
+      "passed": false,
+      "evidence": "A=False, B=False, C=False"
+    },
+    {
+      "text": "Image prompts are in English",
+      "passed": false,
+      "evidence": "Found 0 prompt blocks, English keywords present: False"
+    },
+    {
+      "text": "Each prompt is 30-50 words",
+      "passed": false,
+      "evidence": "Word counts: []"
+    },
+    {
+      "text": "Uses 16:9 aspect ratio",
+      "passed": true,
+      "evidence": "Found '16:9' 4 times"
+    }
+  ]
+}

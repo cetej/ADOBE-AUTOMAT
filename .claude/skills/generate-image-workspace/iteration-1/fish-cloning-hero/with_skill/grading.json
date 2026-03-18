@@ -1,0 +1,44 @@
+{
+  "expectations": [
+    {
+      "text": "Three variants (A, B, C)",
+      "passed": true,
+      "evidence": "A=True, B=True, C=True"
+    },
+    {
+      "text": "Image prompts are in English",
+      "passed": true,
+      "evidence": "Found 4 prompt blocks, English keywords present: True"
+    },
+    {
+      "text": "Each prompt is 30-50 words",
+      "passed": false,
+      "evidence": "Word counts: [49, 51, 51, 7]"
+    },
+    {
+      "text": "Uses 3:2 aspect ratio",
+      "passed": true,
+      "evidence": "Found '3:2' 4 times"
+    },
+    {
+      "text": "References visual_brief data",
+      "passed": true,
+      "evidence": "Visual brief referenced: True"
+    },
+    {
+      "text": "Performs thumbnail test validation",
+      "passed": true,
+      "evidence": "Thumbnail validation present: True"
+    },
+    {
+      "text": "Asks user which variant to generate",
+      "passed": true,
+      "evidence": "User choice prompt: True"
+    },
+    {
+      "text": "Uses structured variant types (metaphoric/editorial/symbolic)",
+      "passed": true,
+      "evidence": "Variant types present: True"
+    }
+  ]
+}

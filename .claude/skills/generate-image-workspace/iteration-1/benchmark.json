@@ -1,0 +1,36 @@
+{
+  "skill_name": "generate-image",
+  "iteration": 1,
+  "configurations": [
+    {
+      "name": "with_skill",
+      "results": [
+        {"eval_name": "fish-cloning-hero", "pass_rate": 0.875, "passed": 7, "total": 8, "tokens": 58889, "duration_seconds": 101.0},
+        {"eval_name": "yellowstone-illustration", "pass_rate": 0.875, "passed": 7, "total": 8, "tokens": 59751, "duration_seconds": 107.8},
+        {"eval_name": "gulf-stream-hero", "pass_rate": 0.875, "passed": 7, "total": 8, "tokens": 59070, "duration_seconds": 97.9}
+      ],
+      "aggregate": {"mean_pass_rate": 0.875, "mean_tokens": 59237, "mean_duration_seconds": 102.2}
+    },
+    {
+      "name": "without_skill (baseline)",
+      "results": [
+        {"eval_name": "fish-cloning-hero", "pass_rate": 0.50, "passed": 2, "total": 4, "tokens": 20005, "duration_seconds": 26.5},
+        {"eval_name": "yellowstone-illustration", "pass_rate": 0.25, "passed": 1, "total": 4, "tokens": 19364, "duration_seconds": 23.0},
+        {"eval_name": "gulf-stream-hero", "pass_rate": 0.25, "passed": 1, "total": 4, "tokens": 19953, "duration_seconds": 26.3}
+      ],
+      "aggregate": {"mean_pass_rate": 0.333, "mean_tokens": 19774, "mean_duration_seconds": 25.3}
+    }
+  ],
+  "delta": {
+    "pass_rate": "+54.2%",
+    "tokens": "+199%",
+    "duration": "+304%",
+    "note": "Skill dramatically improves quality (visual brief, thumbnail validation, structured variants, correct aspect ratios) at cost of ~3x more tokens and ~4x more time"
+  },
+  "analyst_observations": [
+    "Word count assertion fails consistently for with_skill — prompts run 51-55 words instead of max 50. The skill says 30-50 but the model slightly overshoots.",
+    "Baseline fails on format (no ``` blocks, no 'Varianta' labels) because it has no structural guidance — the grading partially penalizes format differences vs. actual quality.",
+    "The skill uniquely adds: visual_brief extraction, VISUAL_REFERENCE.md tone mapping, thumbnail validation, structured A/B/C variant types, and user choice prompt — none of which baseline produces.",
+    "Token cost is ~3x higher with skill (60K vs 20K) because the skill requires reading 3 files (analysis, visual reference, skill itself) and performing multi-step workflow."
+  ]
+}
