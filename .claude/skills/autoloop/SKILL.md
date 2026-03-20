@@ -164,17 +164,17 @@ For `*/SKILL.md` files, use this structural heuristic. Run each check and sum po
 
 | # | Check | Points | How to verify |
 |---|-------|--------|---------------|
-| S1 | Description has trigger conditions | +2 | Grep description line for: `when`, `use when`, `use this`, `after`, `before`, `trigger` (case-insensitive) |
+| S1 | Description has trigger conditions | +2 | Grep description line for: `when`, `use when`, `use this`, `after`, `before`, `trigger`, `když`, `použij`, `pouzi[jt]` (case-insensitive) |
 | S2 | Description is 50-200 chars | +1 | Measure description field length |
 | S3 | argument-hint is present and non-empty | +1 | Check frontmatter |
 | S4 | effort field is present | +1 | Check frontmatter |
-| S5 | Has process/steps section | +1 | Grep for `^##.*[Pp]rocess\|^##.*[Ss]tep\|^## Phase` |
-| S6 | Has error/failure handling section | +1 | Grep for `^##.*[Ee]rror\|^##.*[Ff]ail\|^##.*wrong\|circuit.breaker` |
+| S5 | Has process/steps section | +1 | Grep for `^##.*[Pp]rocess\|^##.*[Ss]tep\|^## Phase\|^##.*[Pp]ostup` |
+| S6 | Has error/failure handling section | +1 | Grep for `^##.*[Ee]rror\|^##.*[Ff]ail\|^##.*wrong\|circuit.breaker\|^##.*[Cc]hyb\|^##.*[Dd]iagnostik` |
 | S7 | References `.claude/memory/` | +2 | Grep for `.claude/memory/` or `memory/state\|memory/learnings\|memory/decisions` |
 | S8 | Logs to decisions or learnings | +1 | Grep for `decisions.md\|learnings.md` and context suggests writing |
 | S9 | Under 500 lines | +1 | `wc -l` |
-| S10 | Has output format section | +1 | Grep for `^##.*[Oo]utput\|^##.*[Ff]ormat\|^##.*[Tt]emplate\|```markdown` |
-| S11 | Has rules/guidelines section | +1 | Grep for `^##.*[Rr]ule\|^##.*[Gg]uideline\|^## Rules` |
+| S10 | Has output format section | +1 | Grep for `^##.*[Oo]utput\|^##.*[Ff]ormat\|^##.*[Tt]emplate\|^##.*[Vv]ýstup\|```markdown` |
+| S11 | Has rules/guidelines section | +1 | Grep for `^##.*[Rr]ule\|^##.*[Gg]uideline\|^## Rules\|^##.*[Pp]ravidl` |
 | S12 | Has shared memory read instruction | +2 | Grep for `Read first\|read.*memory\|Before anything.*read\|Shared Memory` |
 
 ### Negative signals (penalties)
@@ -195,7 +195,7 @@ Run these bash commands and sum the results. Use this exact pattern:
 DESC=$(sed -n '/^---$/,/^---$/p' <target> | grep '^description:' | sed 's/^description: *//')
 
 # S1: trigger words in description (+2)
-echo "$DESC" | grep -iE 'when|use (this|when)|after|before|trigger' > /dev/null && echo "S1:+2" || echo "S1:0"
+echo "$DESC" | grep -iE 'when|use (this|when)|after|before|trigger|když|použij|pouzi[jt]' > /dev/null && echo "S1:+2" || echo "S1:0"
 
 # S2: description length 50-200 (+1)
 LEN=$(echo -n "$DESC" | wc -c)
@@ -208,10 +208,10 @@ sed -n '/^---$/,/^---$/p' <target> | grep -q '^argument-hint:.\+.' && echo "S3:+
 sed -n '/^---$/,/^---$/p' <target> | grep -q '^effort:' && echo "S4:+1" || echo "S4:0"
 
 # S5: process/steps section (+1)
-grep -qiE '^##.*(process|step|phase)' <target> && echo "S5:+1" || echo "S5:0"
+grep -qiE '^##.*(process|step|phase|postup)' <target> && echo "S5:+1" || echo "S5:0"
 
 # S6: error handling section (+1)
-grep -qiE '^##.*(error|fail|wrong)|circuit.breaker' <target> && echo "S6:+1" || echo "S6:0"
+grep -qiE '^##.*(error|fail|wrong|chyb|diagnostik)|circuit.breaker' <target> && echo "S6:+1" || echo "S6:0"
 
 # S7: references .claude/memory/ (+2)
 grep -q '.claude/memory/' <target> && echo "S7:+2" || echo "S7:0"
@@ -223,10 +223,10 @@ grep -qE 'decisions\.md|learnings\.md' <target> && echo "S8:+1" || echo "S8:0"
 [ "$(wc -l < <target>)" -lt 500 ] && echo "S9:+1" || echo "S9:0"
 
 # S10: output format section (+1)
-grep -qiE '^##.*(output|format|template)|```markdown' <target> && echo "S10:+1" || echo "S10:0"
+grep -qiE '^##.*(output|format|template|výstup)|```markdown' <target> && echo "S10:+1" || echo "S10:0"
 
 # S11: rules section (+1)
-grep -qiE '^##.*(rule|guideline)' <target> && echo "S11:+1" || echo "S11:0"
+grep -qiE '^##.*(rule|guideline|pravidl)' <target> && echo "S11:+1" || echo "S11:0"
 
 # S12: shared memory read instruction (+2)
 grep -qiE 'read first|read.*memory|before anything.*read|shared memory' <target> && echo "S12:+2" || echo "S12:0"
