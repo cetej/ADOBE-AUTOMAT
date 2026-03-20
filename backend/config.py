@@ -10,6 +10,10 @@ EXPORTS_DIR = DATA_DIR / "exports"
 UPLOADS_DIR = DATA_DIR / "uploads"
 TRANSLATION_MEMORY_PATH = DATA_DIR / "translation_memory.json"
 
+# Terminologická databáze (ngm-terminology v2.0)
+# Multi-doménová referenční DB — 244K+ termínů (geografie, geologie, medicína, ...)
+MULTI_DOMAIN_DB_PATH = r"C:\Users\stock\Documents\000_NGM\BIOLIB\termdb.db"
+
 # Illustrator proxy
 PROXY_URL = "http://localhost:3001"
 PROXY_TIMEOUT = 60  # sekundy

@@ -17,10 +17,20 @@ from pathlib import Path
 
 import anthropic
 
-from config import TRANSLATION_MEMORY_PATH
+from config import TRANSLATION_MEMORY_PATH, MULTI_DOMAIN_DB_PATH
 from models import TextElement
 
 logger = logging.getLogger(__name__)
+
+# Terminologická databáze (ngm-terminology v2.0 — 244K+ ověřených překladů)
+try:
+    from ngm_terminology import NormalizedTermDB
+    _multi_db = NormalizedTermDB(MULTI_DOMAIN_DB_PATH) if Path(MULTI_DOMAIN_DB_PATH).exists() else None
+    if _multi_db:
+        logger.info("TermDB: načtena referenční DB (%s)", MULTI_DOMAIN_DB_PATH)
+except (ImportError, Exception) as e:
+    _multi_db = None
+    logger.info("TermDB: nedostupná (%s)", e)
 
 # === Translation Memory ===
 
@@ -192,6 +202,44 @@ def _fix_unescaped_quotes(text: str) -> str:
     return text
 
 
+def _build_term_hints(elements: list[TextElement]) -> str:
+    """Vygeneruje terminologický glosář pro batch elementů z referenční DB.
+
+    Extrahuje EN texty, batch-přeloží přes NormalizedTermDB,
+    vrátí markdown tabulku nalezených překladů.
+    """
+    if not _multi_db:
+        return ""
+
+    try:
+        # Extrahuj unikátní texty z elementů
+        texts = list({el.contents.strip() for el in elements if el.contents})
+        if not texts:
+            return ""
+
+        # Batch translate přes referenční DB
+        found = _multi_db.batch_translate(texts, from_lang="en", to_lang="cs")
+        if not found:
+            return ""
+
+        lines = [
+            "\n## Terminologický glosář (ověřené překlady z referenční databáze)",
+            "Použij tyto překlady — jsou ověřené a správné:",
+            "",
+            "| EN | CZ |",
+            "|---|---|",
+        ]
+        for en, cz in sorted(found.items()):
+            lines.append(f"| {en} | {cz} |")
+
+        lines.append("")
+        logger.info("TermDB hints: %d/%d textů nalezeno v referenční DB", len(found), len(texts))
+        return "\n".join(lines)
+    except Exception as e:
+        logger.warning("TermDB hints: chyba — %s", e)
+        return ""
+
+
 def _translate_api_call(
     client: anthropic.Anthropic,
     elements: list[TextElement],
@@ -210,17 +258,25 @@ def _translate_api_call(
         items.append(item)
 
     context = "článku v časopise" if project_type == "idml" else "mapy"
+
+    # Terminologický glosář z referenční DB
+    term_hints = _build_term_hints(elements)
+
     user_msg = (
         f"Přelož následující texty z {context} do češtiny.\n\n"
         f"```json\n{json.dumps(items, ensure_ascii=False, indent=2)}\n```"
     )
 
-    logger.info("Claude API: preklady %d textu (model=%s)", len(elements), model)
+    # System prompt + term hints
+    system = SYSTEM_PROMPT + term_hints if term_hints else SYSTEM_PROMPT
+
+    logger.info("Claude API: preklady %d textu (model=%s, term_hints=%s)",
+                len(elements), model, "yes" if term_hints else "no")
 
     response = client.messages.create(
         model=model,
         max_tokens=8192,
-        system=SYSTEM_PROMPT,
+        system=system,
         messages=[{"role": "user", "content": user_msg}],
     )
 
