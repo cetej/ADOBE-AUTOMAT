@@ -15,6 +15,13 @@ from services.translation_service import (
     get_api_key,
 )
 
+# CzechCorrector — typography auto-fix po překladu
+try:
+    from ngm_terminology.corrector import CzechCorrector
+    _CORRECTOR_AVAILABLE = True
+except ImportError:
+    _CORRECTOR_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["translate"])
 
@@ -113,12 +120,33 @@ async def api_translate(project_id: str, req: TranslateRequest = TranslateReques
                 elem.status = TextStatus.OVERIT
             applied += 1
 
+    # Phase 4.5: CzechCorrector — typography auto-fix na přeložených textech
+    corrected_count = 0
+    if _CORRECTOR_AVAILABLE and applied > 0:
+        try:
+            corrector = CzechCorrector()
+            for elem in project.elements:
+                if elem.czech and elem.id in result_map:
+                    result_c = corrector.correct(
+                        elem.czech,
+                        fix_typography=True,
+                        check_spelling=False,
+                        check_rules=False,
+                    )
+                    if result_c.auto_count > 0:
+                        elem.czech = result_c.text
+                        corrected_count += 1
+            corrector.close()
+        except Exception as e:
+            logger.warning("CzechCorrector: %s", e)
+
     save_project(project)
 
     return {
         "translated": applied,
         "total_requested": len(elements),
         "from_memory": sum(1 for _ in results) - applied if len(results) > applied else 0,
+        "typo_corrected": corrected_count,
         "project": project,
     }
 
