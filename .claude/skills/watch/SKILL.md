@@ -1,9 +1,13 @@
 ---
 name: watch
-description: Scan news and updates from AI/ML ecosystem, Claude Code, and community sources. Use weekly to stay current on tools, libraries, and techniques relevant to this project and orchestration system. Also use when the user asks "what's new" or "check for updates".
+description: Scan AI/ML ecosystem and Claude Code news weekly. Use when the user asks "what's new", "check for updates", or when last scan in news.md is >7 days old.
 argument-hint: [full / quick / topic:specific-topic]
 user-invocable: true
 allowed-tools: Read, Write, Edit, WebSearch, WebFetch, Agent
+model: sonnet
+effort: medium
+maxTurns: 20
+disallowedTools: ""
 ---
 
 # Watch — News & Updates Scanner
@@ -134,6 +138,13 @@ How to trigger:
 - User runs `/watch` or `/watch full` manually
 - Orchestrator checks `.claude/memory/news.md` last scan date — if >7 days, suggest running `/watch`
 - User can set up a hook or reminder externally
+
+## When Things Go Wrong
+
+- **WebSearch returns no results for a tier**: Skip that tier, note it in the report. Don't retry with vaguer queries — that adds noise.
+- **WebFetch fails on a page**: Use the search snippet summary instead. Don't block the whole scan for one broken URL.
+- **All sources return nothing new**: Report "No significant updates since last scan" — this is a valid result, not a failure.
+- **news.md is missing or empty**: Create it with the standard template (see Output Format). First scan initializes the file.
 
 ## Rules
 

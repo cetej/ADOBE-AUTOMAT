@@ -1,9 +1,13 @@
 ---
 name: skill-generator
-description: Create, update, or improve Claude Code skills. Use when asked to generate a new skill, modify an existing one, or when the user says they want a slash command for something.
+description: Create, update, or improve Claude Code skills. Use when asked to generate a new skill, modify an existing one, or for a new slash command.
 argument-hint: [description of the skill to create]
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep
+model: sonnet
+effort: high
+maxTurns: 15
+disallowedTools: Agent
 ---
 
 # Skill Generator
@@ -71,6 +75,10 @@ description: <when to use - be specific, Claude matches on this>
 argument-hint: <expected args>
 disable-model-invocation: <true for side-effects, false otherwise>
 allowed-tools: <comma-separated minimal tool list>
+model: <haiku / sonnet / opus>
+effort: <low / medium / high>
+maxTurns: <number>
+disallowedTools: <comma-separated tools to block, or "" if none>
 ---
 
 # <Title>
@@ -165,25 +173,56 @@ When invoked with "improve-all" or "audit":
    - `.claude/skills/skill-generator/LEARNINGS.md` — past creation lessons
    - `.claude/memory/learnings.md` — system-wide patterns and anti-patterns
 2. **Scan all skills**: Glob `.claude/skills/*/SKILL.md`
-3. **For each skill, check**:
-   - Does the description match quality rules? (specific trigger conditions, not vague)
-   - Are allowed-tools minimal? (no unused Bash/Agent)
-   - Does it integrate with shared memory? (reads learnings, logs decisions)
-   - Does it follow patterns from learnings.md?
-   - Does it violate any anti-patterns from learnings.md?
-   - Is it under 500 lines?
-4. **Generate report**:
+3. **For each skill, run M5 structural scoring** (same metric as `/autoloop`):
+
+### M5 Structural Score (max 15 points)
+
+For each SKILL.md, run these grep-based checks:
+
+```
+Positive checks:
+S1  (+2): description contains trigger words (when/use/after/before/trigger)
+S2  (+1): description length 50-200 chars
+S3  (+1): argument-hint present
+S4  (+1): effort field present
+S5  (+1): process/steps/phase section exists
+S6  (+1): error handling section exists
+S7  (+2): references .claude/memory/
+S8  (+1): logs to decisions.md or learnings.md
+S9  (+1): under 500 lines
+S10 (+1): output/format/template section exists
+S11 (+1): rules/guidelines section exists
+S12 (+2): shared memory read instruction exists
+
+Negative checks:
+N1  (-2): vague description words (useful/helpful/general purpose)
+N2  (-1): missing name field
+N3  (-2): missing description field
+N4  (-1): over 500 lines
+```
+
+4. **Generate report** with scores:
    ```markdown
    ### Skill Audit Report — <date>
-   | Skill | Issues | Severity | Suggested fix |
-   |-------|--------|----------|---------------|
-   | ... | ... | low/medium/high | ... |
+   | Skill | M5 Score | Issues | Suggested fix |
+   |-------|----------|--------|---------------|
+   | scout | 14/15 | S10 missing | Add output format section |
+   | ... | ... | ... | ... |
    ```
-5. **Fix automatically** if severity is low (e.g., missing memory integration line)
-6. **Propose fixes** for medium/high severity — don't auto-fix without user approval
-7. **Update LEARNINGS.md** with any new patterns discovered during audit
+5. **Threshold**: Skills scoring <12/15 get flagged for improvement
+6. **Fix automatically** if score can be raised by adding standard sections (S5, S6, S10, S11)
+7. **Propose fixes** for semantic issues (N1 vague description) — don't auto-fix without user approval
+8. **Update LEARNINGS.md** with any new patterns discovered during audit
+9. **Tip**: For deeper optimization, use `/autoloop <skill-path>` which runs iterative M5 optimization with git rollback
 
 This creates a feedback loop: skills produce learnings → learnings improve skills → improved skills produce better learnings.
+
+## When Things Go Wrong
+
+- **Skill directory already exists**: Read existing SKILL.md first. Use Edit (not Write) for updates.
+- **Description doesn't trigger correctly**: Make it more specific — add concrete trigger words (when, after, use this).
+- **Skill is too long (>500 lines)**: Extract reference material into supporting files in the skill directory.
+- **Frontmatter validation fails**: Check YAML syntax — no tabs, proper quoting, required fields present.
 
 ## Anti-patterns to Avoid
 

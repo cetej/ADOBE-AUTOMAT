@@ -1,9 +1,13 @@
 ---
 name: dependency-audit
-description: Audit project dependencies for outdated versions, breaking changes, and security issues. Use when checking if dependencies need updating, after /watch reports version gaps, or before planning upgrades.
+description: Audit project dependencies for outdated versions, breaking changes, and security issues. Use when checking dependencies, after /watch reports version gaps, or before upgrades.
 argument-hint: [full / quick / package-name]
 user-invocable: true
 allowed-tools: Read, Glob, Grep, WebSearch, WebFetch
+model: sonnet
+effort: medium
+maxTurns: 15
+disallowedTools: Agent
 ---
 
 # Dependency Audit — Version & Compatibility Checker
@@ -104,6 +108,19 @@ Python 3.8 → 3.10+  (MUST do first)
 1. <Prioritized, actionable steps>
 2. <Include "test X after upgrading Y" notes>
 ```
+
+## When Things Go Wrong
+
+- **WebSearch returns nothing**: Package may be renamed or deprecated. Try alternative names, check GitHub directly.
+- **Version conflict detected**: Flag as critical in the report, don't try to resolve — let the user decide the trade-off.
+- **No requirements.txt found**: Check for `pyproject.toml`, `setup.py`, `Pipfile`, or `environment.yml` instead.
+- **Package not on PyPI**: It may be a GitHub-only package or custom fork. Note this in the report.
+
+## After Completion
+
+1. Update `.claude/memory/learnings.md` — if the audit revealed a new dependency pattern or risk, add it
+2. Log significant findings to `.claude/memory/decisions.md` — especially if recommending a major version upgrade path
+3. Update `.claude/memory/news.md` — if any package has a notable new release not yet tracked
 
 ## Rules
 

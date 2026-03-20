@@ -4,11 +4,21 @@ description: Save session state and create a resume prompt for the next session.
 argument-hint: [save / resume / status]
 user-invocable: true
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash
+model: haiku
+effort: low
+maxTurns: 10
+disallowedTools: Agent
 ---
 
 # Checkpoint — Session Continuity Manager
 
 You ensure work survives across session boundaries. You save structured snapshots that allow the next session to resume seamlessly.
+
+## When Things Go Wrong
+
+- **checkpoint.md is corrupted or malformed**: Recreate from state.md + git log. Don't try to parse broken markdown.
+- **Git state is dirty when saving**: Include the dirty state in the checkpoint — it's important context for resume.
+- **No active task to checkpoint**: Save a minimal checkpoint with git state and session notes only.
 
 ## Input
 

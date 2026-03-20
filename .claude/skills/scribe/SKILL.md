@@ -4,6 +4,10 @@ description: Record decisions, update task state, and capture learnings in share
 argument-hint: [what to record — "decision", "learning", "state", or free text]
 user-invocable: true
 allowed-tools: Read, Write, Edit
+model: haiku
+effort: low
+maxTurns: 6
+disallowedTools: Agent
 ---
 
 # Scribe — Recorder & Memory Manager
