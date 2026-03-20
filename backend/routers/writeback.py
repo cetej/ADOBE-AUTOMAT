@@ -13,6 +13,7 @@ from models import ProjectPhase, ProjectType
 from services.project_store import get_project, save_project
 from services.idml_writeback import writeback_idml
 from services.map_writeback import writeback_map, preview_map
+from services.translation_service import update_translation_memory, write_back_to_termdb
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["writeback"])
@@ -47,12 +48,22 @@ async def api_writeback(project_id: str):
         logger.error("Writeback selhal: %s", e)
         raise HTTPException(500, f"Writeback selhal: {e}")
 
+    # Auto-save: schválené překlady (status=OK) → translation_memory + terminology DB
+    tm_added = update_translation_memory(project.elements)
+    termdb_added = write_back_to_termdb(project.elements)
+    if tm_added:
+        logger.info("Writeback: +%d překladů do translation memory", tm_added)
+    if termdb_added:
+        logger.info("Writeback: +%d termínů do terminology DB", termdb_added)
+
     # Ulozit cestu k exportu do projektu
     if result.get("output_path"):
         project.exports["idml_cz"] = result["output_path"]
         project.phase = ProjectPhase.EXPORTED
         save_project(project)
 
+    result["tm_added"] = tm_added
+    result["termdb_added"] = termdb_added
     return result
 
 
@@ -97,10 +108,20 @@ async def api_writeback_map(project_id: str):
         logger.error("MAP writeback selhal: %s", e)
         raise HTTPException(500, f"MAP writeback selhal: {e}")
 
+    # Auto-save: schválené překlady → translation_memory + terminology DB
+    tm_added = update_translation_memory(project.elements)
+    termdb_added = write_back_to_termdb(project.elements)
+    if tm_added:
+        logger.info("MAP writeback: +%d překladů do translation memory", tm_added)
+    if termdb_added:
+        logger.info("MAP writeback: +%d termínů do terminology DB", termdb_added)
+
     if result.get("changed", 0) > 0:
         project.phase = ProjectPhase.WRITTEN_BACK
         save_project(project)
 
+    result["tm_added"] = tm_added
+    result["termdb_added"] = termdb_added
     return result
 
 

@@ -69,6 +69,61 @@ def update_translation_memory(elements: list[TextElement]) -> int:
     return added
 
 
+def write_back_to_termdb(elements: list[TextElement]) -> int:
+    """Zapíše schválené překlady (status=OK) zpět do NG-ROBOT terminology.db.
+
+    Slouží jako zpětná vazba z ADOBE-AUTOMAT do sdílené terminologické DB.
+    Zapisuje do flat TermDB (operational), ne do referenční NormalizedTermDB.
+    """
+    try:
+        from ngm_terminology import TermDB
+        from ngm_terminology.config import find_term_db
+    except ImportError:
+        return 0
+
+    term_db_path = find_term_db()
+    if not term_db_path:
+        return 0
+
+    try:
+        tdb = TermDB(term_db_path)
+    except Exception:
+        return 0
+
+    added = 0
+    for el in elements:
+        if el.czech and el.status == "OK" and el.contents:
+            en = el.contents.strip()
+            cz = el.czech.strip()
+            if en and cz and len(en) >= 2 and en.lower() != cz.lower():
+                # Určení domény z kategorie elementu
+                domain = _category_to_domain(el.category)
+                is_new = tdb.add_term(
+                    en=en, cz=cz, domain=domain,
+                    source="adobe-automat"
+                )
+                if is_new:
+                    added += 1
+
+    if added:
+        logger.info("TermDB write-back: +%d novych terminu z ADOBE-AUTOMAT", added)
+    return added
+
+
+def _category_to_domain(category: str) -> str:
+    """Mapuje ADOBE-AUTOMAT TextCategory na termdb doménu."""
+    if not category:
+        return "general"
+    cat = category.upper()
+    geo_cats = {"OCEANS_SEAS", "CONTINENTS", "COUNTRIES_FULL", "COUNTRIES_ABBREV",
+                "REGIONS", "CITIES", "WATER_BODIES", "LANDFORMS", "PLACES", "SETTLEMENTS"}
+    if cat in geo_cats:
+        return "geography"
+    if cat in {"PERIODS", "EVENTS", "DATES", "TIMELINE"}:
+        return "history"
+    return "general"
+
+
 # === Claude API preklad ===
 
 SYSTEM_PROMPT = """Jsi profesionální překladatel pro National Geographic Česko. Překládáš anglické texty do češtiny.
