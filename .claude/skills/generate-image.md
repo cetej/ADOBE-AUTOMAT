@@ -2,6 +2,7 @@
 name: generate-image
 description: Generovani obrazku pro ZPRACOVANY clanek v NG-ROBOT pipeline (processed/ slozka). Cte visual_brief z 0_analysis.json a VISUAL_REFERENCE.md, navrhnne 3 koncepty a generuje pres ImageGenerator (Nano Banana Pro). Pouzij POUZE kdyz uzivatel chce obrazek ke KONKRETNIMU clanku v processed/ — napr. "/generate-image coral-reef hero", "udelej hero k clanku o...", "ilustrace pro clanek...". NEPOUZIVEJ pro obecne prompty bez clanku (pouzij image-prompt-generator) nebo pro infografiky s pozicovanim prvku (pouzij visual-data-architect).
 argument-hint: "<article-slug> [hero|illustration|infographic]"
+effort: high
 tags: [images, generation, visual]
 ---
 

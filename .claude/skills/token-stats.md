@@ -2,6 +2,7 @@
 name: token-stats
 description: Tokenova spotreba a odhad nakladu za zpracovane clanky v NG-ROBOT. Pouzij kdyz uzivatel rika "kolik to stalo", "naklady", "tokeny", "cost", "spotreba", "kolik stoji clanek", "cena zpracovani". Zobrazi per-model a per-clanek breakdown s cenami v USD.
 argument-hint: "[article-slug]"
+effort: low
 tags: [analytics, tokens, cost]
 ---
 

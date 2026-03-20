@@ -2,6 +2,7 @@
 name: reprocess
 description: Prepracovani clanku od konkretni faze v NG-ROBOT pipeline. Pouzij kdyz uzivatel chce "prepracovat", "reprocess", "spustit znovu od faze", "opravit clanek od faze 5", nebo "from-phase". Vyzaduje cislo faze (0-9) a slug clanku. Pred spustenim VZDY zepta na potvrzeni.
 argument-hint: "<phase-number> <article-slug>"
+effort: low
 tags: [articles, processing, reprocess]
 ---
 

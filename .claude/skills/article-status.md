@@ -2,6 +2,7 @@
 name: article-status
 description: Prehled stavu VSECH zpracovanych clanku v processed/ — kolik je hotovych, rozpracovanych, na ktere fazi stoji. Filtrovani podle data nebo faze, detekce truncation. Pouzij kdyz uzivatel rika "kolik clanku", "stav clanku", "status", "prehled", "co je hotove", "truncation", nebo chce videt tabulku vsech clanku. NEPOUZIVEJ pro diagnostiku jednoho konkretniho clanku.
 argument-hint: "[date-prefix | phase-number]"
+effort: low
 tags: [articles, status, diagnostics]
 ---
 

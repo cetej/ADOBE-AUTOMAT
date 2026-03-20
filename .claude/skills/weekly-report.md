@@ -1,6 +1,8 @@
 ---
 name: weekly-report
 description: "Týdenní přehled zpracovaných článků, nákladů a statistik NG-ROBOT. Použij když uživatel říká 'týdenní report', 'weekly report', 'co se udělalo za týden', 'přehled za týden', 'souhrn práce', nebo chce vidět aktivitu za časové období. NEPOUŽÍVEJ pro status jednoho článku (použij article-status) nebo pro tokeny bez časového rozsahu (použij token-stats)."
+argument-hint: "[YYYY-MM-DD | days:N]"
+effort: medium
 ---
 
 # Weekly Report — týdenní přehled NG-ROBOT
