@@ -1,6 +1,7 @@
 ---
 name: cms-aqua-publish
 description: "Publikování zpracovaného článku do CMS Aqua jako KONCEPT. Použij VŽDY když uživatel říká 'publikovat', 'publish', 'CMS', 'Aqua', 'zadat do CMS', 'nahrát článek', nebo chce poslat článek do redakčního systému. Skill pokrývá celý 7-krokový workflow: autentizace, upload obrázků do DAM, vytvoření článku, infoboxy, inline obrázky, galerie, videa. NEPOUŽÍVEJ pro diagnostiku CMS problémů (použij cms_aqua_diag.py) ani pro obecnou práci s API."
+argument-hint: "<article-folder-path>"
 effort: high
 ---
 
