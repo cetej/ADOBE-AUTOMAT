@@ -8,6 +8,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
+from config import EXPORTS_DIR
+from models import ProjectPhase, ProjectType
 from services.project_store import get_project, save_project
 from services.idml_writeback import writeback_idml
 from services.map_writeback import writeback_map, preview_map
@@ -48,7 +50,7 @@ async def api_writeback(project_id: str):
     # Ulozit cestu k exportu do projektu
     if result.get("output_path"):
         project.exports["idml_cz"] = result["output_path"]
-        project.phase = "exported"
+        project.phase = ProjectPhase.EXPORTED
         save_project(project)
 
     return result
@@ -82,7 +84,7 @@ async def api_writeback_map(project_id: str):
     if not project:
         raise HTTPException(404, "Project not found")
 
-    if project.type != "map":
+    if project.type != ProjectType.MAP:
         raise HTTPException(400, "Projekt neni typu MAP")
 
     with_czech = [e for e in project.elements if e.czech]
@@ -96,7 +98,7 @@ async def api_writeback_map(project_id: str):
         raise HTTPException(500, f"MAP writeback selhal: {e}")
 
     if result.get("changed", 0) > 0:
-        project.phase = "written_back"
+        project.phase = ProjectPhase.WRITTEN_BACK
         save_project(project)
 
     return result
@@ -123,7 +125,9 @@ async def api_download_export(project_id: str, export_key: str):
     if not file_path:
         raise HTTPException(404, f"Export '{export_key}' nenalezen")
 
-    path = Path(file_path)
+    path = Path(file_path).resolve()
+    if not path.is_relative_to(EXPORTS_DIR.resolve()):
+        raise HTTPException(403, "Pristup k souboru mimo export adresar")
     if not path.exists():
         raise HTTPException(404, f"Soubor nenalezen: {path}")
 

@@ -1,4 +1,15 @@
 {
+  "extraKnownMarketplaces": {
+    "stopa-tools": {
+      "source": {
+        "source": "github",
+        "repo": "cetej/STOPA"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "stopa-orchestration@stopa-tools": true
+  },
   "hooks": {
     "SessionStart": [
       {

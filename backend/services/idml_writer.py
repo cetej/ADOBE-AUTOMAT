@@ -30,55 +30,6 @@ def xml_escape(text: str) -> str:
     )
 
 
-def safe_replace_content(
-    story_path: str | Path,
-    old_text: str,
-    new_text: str,
-) -> bool:
-    """Nahradi jeden <Content> element v Story XML.
-
-    Args:
-        story_path: Cesta k Story_*.xml souboru.
-        old_text: Puvodni text (plain, ne XML-escaped).
-        new_text: Novy text (plain, ne XML-escaped).
-
-    Returns:
-        True pokud nahrazeni probehlo.
-    """
-    story_path = Path(story_path)
-
-    data = story_path.read_bytes()
-    xml_str = data.decode("utf-8")
-
-    escaped_old = xml_escape(old_text)
-    escaped_new = xml_escape(new_text)
-    old_content = f"<Content>{escaped_old}</Content>"
-    new_content = f"<Content>{escaped_new}</Content>"
-
-    if old_content in xml_str:
-        xml_str = xml_str.replace(old_content, new_content, 1)
-    else:
-        # Whitespace-tolerantni match
-        pattern = _build_content_pattern(escaped_old)
-        match = re.search(pattern, xml_str)
-        if match:
-            ws_before = match.group(1)
-            ws_after = match.group(2)
-            new_content = f"<Content>{ws_before}{escaped_new}{ws_after}</Content>"
-            xml_str = xml_str[:match.start()] + new_content + xml_str[match.end():]
-        else:
-            logger.warning("Content not found in %s: '%s'", story_path.name, old_text[:50])
-            return False
-
-    # Validace
-    from services.idml_validator import validate_xml_string
-    if not validate_xml_string(xml_str):
-        logger.error("XML validation failed after replace in %s", story_path.name)
-        return False
-
-    story_path.write_bytes(xml_str.encode("utf-8"))
-    return True
-
 
 def _build_content_pattern(escaped_text: str) -> str:
     """Vytvori regex pattern pro <Content> s toleranci na whitespace okolo textu.

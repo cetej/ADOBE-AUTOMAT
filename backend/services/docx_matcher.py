@@ -17,7 +17,7 @@ import re
 import logging
 from dataclasses import dataclass, field
 
-from models import TextElement
+from models import TextElement, TextStatus
 from services.docx_parser import DocxSection, DocxParseResult, get_all_filtered_sections
 
 logger = logging.getLogger(__name__)
@@ -249,20 +249,20 @@ def _assign_czech_to_elements(story: StoryBlock, section: DocxSection):
     if n_elems == 1:
         # Jednoduchý případ — celý CZ text na jediný element
         story.elements[0].czech = cz_text
-        story.elements[0].status = "OVERIT"
+        story.elements[0].status = TextStatus.OVERIT
         story.elements[0].notes = f"DOCX match (str. {section.page_start}, {section.section_type})"
 
     elif n_elems == n_paras:
         # 1:1 mapování — každý odstavec na jeden element
         for elem, para in zip(story.elements, section.paragraphs):
             elem.czech = para
-            elem.status = "OVERIT"
+            elem.status = TextStatus.OVERIT
             elem.notes = f"DOCX match 1:1 (str. {section.page_start})"
 
     else:
         # Různý počet — CZ text na první element, ostatní dostanou odkaz
         story.elements[0].czech = cz_text
-        story.elements[0].status = "OVERIT"
+        story.elements[0].status = TextStatus.OVERIT
         story.elements[0].notes = (
             f"DOCX match (str. {section.page_start}, {section.section_type}) — "
             f"celý CZ blok ({n_paras} odst.) pro {n_elems} EN elementů"

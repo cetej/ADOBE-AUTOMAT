@@ -15,8 +15,8 @@ PROXY_URL = "http://localhost:3001"
 PROXY_TIMEOUT = 60  # sekundy
 
 # Server
-HOST = "0.0.0.0"
-PORT = 8000
+HOST = "127.0.0.1"
+PORT = 8100
 
 # Zajistit existenci adresaru
 for d in [PROJECTS_DIR, EXPORTS_DIR, UPLOADS_DIR]:

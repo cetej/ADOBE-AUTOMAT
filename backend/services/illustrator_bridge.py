@@ -143,9 +143,8 @@ def get_active_document_info(timeout: int | None = None) -> dict:
 async def check_connection() -> dict:
     """Zkontroluje pripojeni k proxy a Illustratoru (non-blocking wrapper)."""
     import asyncio
-    loop = asyncio.get_event_loop()
     try:
-        result = await loop.run_in_executor(None, lambda: get_documents(timeout=5))
+        result = await asyncio.get_running_loop().run_in_executor(None, lambda: get_documents(timeout=5))
         return {"connected": True, "documents": result}
     except Exception as e:
         return {"connected": False, "error": str(e)}

@@ -1,5 +1,6 @@
 <script>
   import { api } from '../lib/api.js';
+  import { loadActiveDoc as fetchActiveDoc } from '../lib/illustrator.js';
   import { projectList, currentProject } from '../stores/project.js';
   import { notify } from '../stores/notifications.js';
   import { navigate } from '../stores/router.js';
@@ -88,21 +89,7 @@
   async function loadActiveDoc() {
     aiDocLoading = true;
     aiDoc = null;
-    try {
-      const res = await fetch('/api/illustrator/status');
-      const data = await res.json();
-      if (data.connected && data.documents) {
-        let docs = [];
-        try {
-          const textContent = data.documents?.response?.content?.[0]?.text;
-          if (textContent) docs = JSON.parse(textContent);
-        } catch { /* fallback */ }
-        if (!docs.length) docs = data.documents?.response?.documents || data.documents?.documents || [];
-        if (docs.length > 0) aiDoc = docs[0];
-      }
-    } catch {
-      aiDoc = null;
-    }
+    aiDoc = await fetchActiveDoc();
     aiDocLoading = false;
   }
 

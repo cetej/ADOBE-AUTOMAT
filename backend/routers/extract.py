@@ -5,7 +5,6 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import asyncio
 import logging
-import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
@@ -40,10 +39,8 @@ async def api_extract(project_id: str):
 
 async def _extract_map(project):
     """Extrakce textu z Illustratoru pres ExtendScript."""
-    loop = asyncio.get_event_loop()
-
     try:
-        extraction = await loop.run_in_executor(
+        extraction = await asyncio.get_running_loop().run_in_executor(
             None, extract_from_illustrator
         )
     except RuntimeError as e:

@@ -12,7 +12,16 @@ from models import TextElement
 
 logger = logging.getLogger(__name__)
 
-EXTRACT_SCRIPT = (Path(__file__).parent.parent / "extendscripts" / "extract_texts.jsx").read_text(encoding="utf-8")
+_EXTRACT_SCRIPT_PATH = Path(__file__).parent.parent / "extendscripts" / "extract_texts.jsx"
+_extract_script_cache: str | None = None
+
+
+def _load_extract_script() -> str:
+    """Lazy load ExtendScript — nečte soubor při importu modulu."""
+    global _extract_script_cache
+    if _extract_script_cache is None:
+        _extract_script_cache = _EXTRACT_SCRIPT_PATH.read_text(encoding="utf-8")
+    return _extract_script_cache
 
 
 def extract_from_illustrator(timeout: int = 120) -> dict:
@@ -28,7 +37,7 @@ def extract_from_illustrator(timeout: int = 120) -> dict:
         RuntimeError: Pri chybe komunikace s Illustratorem.
     """
     logger.info("Starting text extraction from Illustrator...")
-    raw_result = execute_script(EXTRACT_SCRIPT, timeout=timeout)
+    raw_result = execute_script(_load_extract_script(), timeout=timeout)
 
     # Proxy vraci {"content": [{"type": "text", "text": "JSON"}]}
     result = raw_result

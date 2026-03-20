@@ -179,7 +179,9 @@
       "Bash(cp -r \"/c/Users/stock/Documents/000_NGM/ng-robot/.claude/memory\" \".claude/memory\")",
       "Skill(orchestrate)",
       "Skill(orchestrate:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Skill(autoloop)",
+      "Skill(autoloop:*)"
     ]
   }
 }

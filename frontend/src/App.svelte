@@ -44,8 +44,8 @@
         {#each [
           { id: 'extractor', label: 'Extrakce' },
           { id: 'editor', label: 'Editor' },
-          { id: 'outputs', label: 'Vystupy' },
-          { id: 'writeback', label: 'Zapis' },
+          { id: 'outputs', label: 'V\u00fdstupy' },
+          { id: 'writeback', label: 'Z\u00e1pis' },
         ] as tab}
           <button
             class="px-4 py-2.5 text-sm font-medium border-b-2 transition-colors

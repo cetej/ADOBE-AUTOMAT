@@ -2,7 +2,6 @@
   import { currentProject } from '../stores/project.js';
   import { notify } from '../stores/notifications.js';
   import { api } from '../lib/api.js';
-  import StatusBadge from '../components/StatusBadge.svelte';
   import CategorySelect from '../components/CategorySelect.svelte';
   import FilterToolbar from '../components/FilterToolbar.svelte';
   import StatsPanel from '../components/StatsPanel.svelte';
@@ -304,7 +303,7 @@
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100">
-              {#each filtered as el, i (el.id + '/' + i)}
+              {#each filtered as el, i (el.id)}
                 <tr
                   class="hover:bg-blue-50/40 transition-colors {editingId === el.id ? 'bg-blue-50' : ''}"
                 >

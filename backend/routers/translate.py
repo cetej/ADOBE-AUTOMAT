@@ -6,7 +6,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import logging
 from fastapi import APIRouter, HTTPException
 
-from models import TextUpdate, BulkTextUpdate, TranslateRequest
+from models import TextUpdate, BulkTextUpdate, TranslateRequest, TextStatus
 from services.project_store import get_project, save_project
 from services.translation_service import (
     translate_batch,
@@ -110,7 +110,7 @@ async def api_translate(project_id: str, req: TranslateRequest = TranslateReques
             elem.czech = result_map[elem.id]
             elem.auto_translated = True
             if not elem.status:
-                elem.status = "OVERIT"
+                elem.status = TextStatus.OVERIT
             applied += 1
 
     save_project(project)

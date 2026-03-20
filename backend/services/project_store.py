@@ -20,8 +20,20 @@ def _slugify(text: str) -> str:
     return slug[:64]
 
 
+def _safe_id(project_id: str) -> str:
+    """Sanitizuje project_id — povoli jen alfanumericke znaky, pomlcky a podtrzitka."""
+    safe = re.sub(r"[^\w-]", "", project_id)
+    if not safe:
+        raise ValueError(f"Neplatne project_id: {project_id!r}")
+    return safe
+
+
 def _project_path(project_id: str) -> Path:
-    return PROJECTS_DIR / f"{project_id}.json"
+    path = PROJECTS_DIR / f"{_safe_id(project_id)}.json"
+    # Guard: vysledna cesta musi byt uvnitr PROJECTS_DIR
+    if not path.resolve().is_relative_to(PROJECTS_DIR.resolve()):
+        raise ValueError(f"Path traversal attempt: {project_id!r}")
+    return path
 
 
 def list_projects() -> list[Project]:

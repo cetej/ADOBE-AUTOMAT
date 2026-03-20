@@ -17,9 +17,8 @@ async def api_status():
 async def api_documents():
     """Seznam otevrenych dokumentu v Illustratoru."""
     import asyncio
-    loop = asyncio.get_event_loop()
     try:
-        result = await loop.run_in_executor(None, lambda: get_documents(timeout=10))
+        result = await asyncio.get_running_loop().run_in_executor(None, lambda: get_documents(timeout=10))
         return result or {"documents": []}
     except Exception as e:
         return {"error": str(e), "documents": []}

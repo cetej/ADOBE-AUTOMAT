@@ -16,11 +16,6 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Regex pro stránkové markery — (legenda str. 44), (sloupek str. 55-56), (citát str. 77) atd.
-PAGE_MARKER_RE = re.compile(
-    r'^\((?:legenda|sloupek|citát|str\.?)\s+str\.?\s*(\d+)(?:\s*[-–]\s*(\d+))?\)$',
-    re.IGNORECASE
-)
 
 
 @dataclass

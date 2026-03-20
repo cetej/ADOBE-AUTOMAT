@@ -20,7 +20,10 @@
   }
 
   checkConnection();
-  const interval = setInterval(checkConnection, 30000);
+  $effect(() => {
+    const interval = setInterval(checkConnection, 30000);
+    return () => clearInterval(interval);
+  });
 </script>
 
 <button

@@ -2,6 +2,7 @@
   import { currentProject } from '../stores/project.js';
   import { notify } from '../stores/notifications.js';
   import { api } from '../lib/api.js';
+  import { loadActiveDoc as fetchActiveDoc } from '../lib/illustrator.js';
   import { navigate } from '../stores/router.js';
   import FileUpload from '../components/FileUpload.svelte';
 
@@ -10,27 +11,9 @@
   let aiDoc = $state(null);
   let aiDocLoading = $state(false);
 
-  // Nacti aktivni dokument z Illustratoru
   async function loadActiveDoc() {
     aiDocLoading = true;
-    try {
-      const res = await fetch('/api/illustrator/status');
-      const data = await res.json();
-      if (data.connected && data.documents) {
-        // Proxy format: documents.response.content[0].text = JSON string s polem dokumentu
-        let docs = [];
-        try {
-          const textContent = data.documents?.response?.content?.[0]?.text;
-          if (textContent) docs = JSON.parse(textContent);
-        } catch { /* fallback */ }
-        if (!docs.length) docs = data.documents?.response?.documents || data.documents?.documents || [];
-        aiDoc = docs.length > 0 ? docs[0] : { name: '(zadny dokument)' };
-      } else {
-        aiDoc = null;
-      }
-    } catch {
-      aiDoc = null;
-    }
+    aiDoc = await fetchActiveDoc();
     aiDocLoading = false;
   }
 
