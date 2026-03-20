@@ -26,3 +26,9 @@ output/
 # Env
 .env
 *.env.local
+
+# MCP runtime
+.playwright-mcp/
+
+# Test artifacts
+grouped_test.xlsx
