@@ -9,7 +9,7 @@ Generováno z analýzy 15 IDML souborů květnového čísla NG 05/2026.
 import json
 from pathlib import Path
 
-from backend.models_layout import (
+from models_layout import (
     Bounds, FrameType, SlotSpec, SpreadPattern, SpreadType, StyleProfile,
 )
 

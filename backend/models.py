@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 class ProjectType(str, Enum):
     MAP = "map"
     IDML = "idml"
+    LAYOUT = "layout"
 
 
 class ProjectPhase(str, Enum):

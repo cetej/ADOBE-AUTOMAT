@@ -18,16 +18,16 @@ from math import ceil
 from pathlib import Path
 from typing import Optional
 
-from backend.models_layout import (
+from models_layout import (
     ArticleText, FrameType, ImageInfo, ImageOrientation, ImagePriority,
     LayoutPlan, PlannedSpread, SpreadType, TextEstimate,
 )
-from backend.services.layout.image_analyzer import analyze_batch, classify_images
-from backend.services.layout.spread_patterns import (
+from services.layout.image_analyzer import analyze_batch, classify_images
+from services.layout.spread_patterns import (
     get_all_patterns, get_pattern, get_patterns_for_role,
 )
-from backend.services.layout.style_profiles import get_profile
-from backend.services.layout.text_parser import estimate_text_space, parse_article_text
+from services.layout.style_profiles import get_profile
+from services.layout.text_parser import estimate_text_space, parse_article_text
 
 logger = logging.getLogger(__name__)
 

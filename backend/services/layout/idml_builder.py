@@ -15,14 +15,14 @@ from html import escape as html_escape
 from pathlib import Path
 from typing import Optional
 
-from backend.models_layout import (
+from models_layout import (
     Bounds, FrameType, LayoutPlan, PlannedSpread, SlotSpec,
     SpreadPattern, StyleInfo, StyleProfile,
 )
-from backend.services.layout.spread_patterns import (
+from services.layout.spread_patterns import (
     get_pattern, instantiate_pattern,
 )
-from backend.services.layout.style_profiles import (
+from services.layout.style_profiles import (
     get_profile, get_style_for_frame_type,
 )
 

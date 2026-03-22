@@ -4,6 +4,25 @@ Poučení z vývoje. Nejnovější záznamy nahoře.
 
 ---
 
+## 2026-03-22 — Backend API + Integration Pipeline (Session 5)
+
+**Vytvořeno:**
+- `backend/routers/layout.py` — 14 REST API endpointů pro celý layout workflow
+- Layout projekt storage: `data/layout_projects/{id}/` (meta.json, images/, plan, idml)
+
+**Architektura:**
+- Async generování s polling (stejný pattern jako pipeline.py) — threading.Thread + in-memory progress dict
+- Oddělený storage od lokalizačních projektů (layout_projects/ vs projects/)
+- Skeleton IDML: auto-detection z `input/samples/`, preferuje menší MF/EP soubory
+
+**Klíčové rozhodnutí:**
+- Import fix: layout moduly měly `from backend.models_layout import ...` — opraveno na `from models_layout import ...` (CWD je backend/, konzistentní s routery)
+- Layout projekty mají vlastní storage (ne project_store.py) — jiná struktura dat (images, plan, idml vs elements)
+
+**E2E pipeline ověřen:** create → upload images (4) → upload text → plan (rule-based, 3 spreads) → generate IDML (68 KB) → download
+
+---
+
 ## 2026-03-22 — Layout Planner: AI kompozice (Session 4)
 
 **Moduly:**

@@ -1,0 +1,592 @@
+"""REST API endpointy pro Layout Generator.
+
+Endpointy:
+- POST /api/layout/create-project — nový layout projekt
+- POST /api/layout/upload-images/{project_id} — upload fotek (multipart)
+- POST /api/layout/upload-text/{project_id} — upload textu
+- POST /api/layout/plan/{project_id} — spustí layout planner
+- GET  /api/layout/plan/{project_id}/progress — polling progress
+- POST /api/layout/generate/{project_id} — z LayoutPlan vygeneruje IDML
+- GET  /api/layout/generate/{project_id}/progress — polling progress
+- GET  /api/layout/download/{project_id} — stáhne hotový IDML
+- POST /api/layout/analyze-template — upload IDML vzoru → analýza
+- GET  /api/layout/templates — seznam style profiles
+- GET  /api/layout/patterns — seznam spread patterns
+- GET  /api/layout/projects — seznam layout projektů
+- GET  /api/layout/projects/{project_id} — detail projektu
+- DELETE /api/layout/projects/{project_id} — smazání projektu
+"""
+
+import sys
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+import json
+import logging
+import shutil
+import threading
+import time
+import uuid
+from pathlib import Path
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
+from config import DATA_DIR, EXPORTS_DIR
+from services.translation_service import get_api_key
+
+logger = logging.getLogger(__name__)
+router = APIRouter(tags=["layout"])
+
+# Adresář pro layout projekty
+LAYOUT_DIR = DATA_DIR / "layout_projects"
+LAYOUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# Výchozí skeleton IDML — první dostupný IDML z datasetu
+SAMPLES_DIR = Path(__file__).resolve().parent.parent.parent / "input" / "samples"
+
+# In-memory progress store
+_layout_progress = {}
+
+
+# --- Request/Response modely ---
+
+class LayoutProjectCreate(BaseModel):
+    name: str
+    style_profile: str = "ng_feature"
+
+
+class PlanRequest(BaseModel):
+    num_pages: int | str = "auto"
+    use_ai: bool = False
+    style_profile: Optional[str] = None
+
+
+class GenerateRequest(BaseModel):
+    skeleton_idml: Optional[str] = None  # cesta ke skeleton; None = auto
+
+
+# --- Helpers ---
+
+def _project_dir(project_id: str) -> Path:
+    """Vrátí adresář layout projektu."""
+    safe_id = "".join(c for c in project_id if c.isalnum() or c in "-_")
+    if not safe_id:
+        raise ValueError(f"Neplatné project_id: {project_id!r}")
+    d = LAYOUT_DIR / safe_id
+    if not d.resolve().is_relative_to(LAYOUT_DIR.resolve()):
+        raise ValueError(f"Path traversal: {project_id!r}")
+    return d
+
+
+def _load_project_meta(project_id: str) -> dict:
+    """Načte metadata layout projektu."""
+    meta_path = _project_dir(project_id) / "meta.json"
+    if not meta_path.exists():
+        raise HTTPException(404, f"Layout projekt neexistuje: {project_id}")
+    return json.loads(meta_path.read_text(encoding="utf-8"))
+
+
+def _save_project_meta(project_id: str, meta: dict) -> None:
+    """Uloží metadata layout projektu."""
+    meta["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    meta_path = _project_dir(project_id) / "meta.json"
+    meta_path.write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _find_skeleton_idml() -> Optional[Path]:
+    """Najde vhodný skeleton IDML z datasetu. Preferuje menší (MF) soubory."""
+    if not SAMPLES_DIR.exists():
+        return None
+    idmls = sorted(SAMPLES_DIR.glob("*.idml"), key=lambda p: p.stat().st_size)
+    for idml in idmls:
+        # Preferuj MF (menší, čistější) nebo EP
+        if "MF" in idml.name or "EP" in idml.name:
+            return idml
+    return idmls[0] if idmls else None
+
+
+# --- Endpointy ---
+
+@router.post("/api/layout/create-project")
+def api_create_layout_project(req: LayoutProjectCreate):
+    """Vytvoří nový layout projekt."""
+    project_id = req.name.lower().strip()
+    project_id = "".join(c if c.isalnum() or c in " -_" else "" for c in project_id)
+    project_id = "-".join(project_id.split())[:64]
+    if not project_id:
+        project_id = f"layout-{uuid.uuid4().hex[:8]}"
+
+    # Unikátnost
+    base_id = project_id
+    counter = 1
+    while _project_dir(project_id).exists():
+        project_id = f"{base_id}-{counter}"
+        counter += 1
+
+    d = _project_dir(project_id)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "images").mkdir(exist_ok=True)
+
+    meta = {
+        "id": project_id,
+        "name": req.name,
+        "style_profile": req.style_profile,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "phase": "created",
+        "images": [],
+        "text_file": None,
+        "plan": None,
+        "generated_idml": None,
+    }
+    _save_project_meta(project_id, meta)
+
+    return {"project_id": project_id, "meta": meta}
+
+
+@router.get("/api/layout/projects")
+def api_list_layout_projects():
+    """Seznam layout projektů."""
+    projects = []
+    for d in sorted(LAYOUT_DIR.iterdir()):
+        meta_path = d / "meta.json"
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                projects.append(meta)
+            except Exception:
+                continue
+    return {"projects": projects}
+
+
+@router.get("/api/layout/projects/{project_id}")
+def api_get_layout_project(project_id: str):
+    """Detail layout projektu."""
+    meta = _load_project_meta(project_id)
+    return {"project": meta}
+
+
+@router.delete("/api/layout/projects/{project_id}")
+def api_delete_layout_project(project_id: str):
+    """Smaže layout projekt."""
+    d = _project_dir(project_id)
+    if not d.exists():
+        raise HTTPException(404, "Projekt neexistuje")
+    shutil.rmtree(d)
+    return {"deleted": project_id}
+
+
+@router.post("/api/layout/upload-images/{project_id}")
+async def api_upload_images(project_id: str, files: list[UploadFile] = File(...)):
+    """Upload fotek do layout projektu."""
+    meta = _load_project_meta(project_id)
+    images_dir = _project_dir(project_id) / "images"
+    images_dir.mkdir(exist_ok=True)
+
+    uploaded = []
+    for f in files:
+        if not f.filename:
+            continue
+        # Bezpečný filename
+        safe_name = "".join(c if c.isalnum() or c in ".-_" else "_" for c in f.filename)
+        dest = images_dir / safe_name
+        # Deduplikace
+        counter = 1
+        while dest.exists():
+            stem = dest.stem
+            dest = images_dir / f"{stem}_{counter}{dest.suffix}"
+            counter += 1
+
+        content = await f.read()
+        dest.write_bytes(content)
+        uploaded.append(str(dest))
+
+    # Analyzovat nahrané fotky
+    from services.layout.image_analyzer import analyze_batch
+    all_images_paths = list(images_dir.glob("*"))
+    all_images_paths = [p for p in all_images_paths if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".gif")]
+    image_infos = analyze_batch([str(p) for p in all_images_paths])
+
+    meta["images"] = [img.model_dump() for img in image_infos]
+    meta["phase"] = "images_uploaded"
+    _save_project_meta(project_id, meta)
+
+    return {
+        "uploaded": len(uploaded),
+        "total_images": len(image_infos),
+        "images": [{"filename": img.filename, "priority": img.priority, "orientation": img.orientation, "megapixels": img.megapixels} for img in image_infos],
+    }
+
+
+@router.post("/api/layout/upload-text/{project_id}")
+async def api_upload_text(
+    project_id: str,
+    text: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
+):
+    """Upload textu — buď jako form field `text` nebo soubor."""
+    meta = _load_project_meta(project_id)
+    d = _project_dir(project_id)
+
+    raw_text = ""
+    if file and file.filename:
+        content = await file.read()
+        raw_text = content.decode("utf-8", errors="replace")
+        text_path = d / file.filename
+        text_path.write_text(raw_text, encoding="utf-8")
+        meta["text_file"] = file.filename
+    elif text:
+        raw_text = text
+        text_path = d / "article.txt"
+        text_path.write_text(raw_text, encoding="utf-8")
+        meta["text_file"] = "article.txt"
+    else:
+        raise HTTPException(400, "Zadej text nebo nahraj soubor")
+
+    # Parsovat text
+    from services.layout.text_parser import parse_article_text, estimate_text_space
+    article = parse_article_text(raw_text)
+    estimate = estimate_text_space(article)
+
+    meta["article"] = article.model_dump()
+    meta["text_estimate"] = estimate.model_dump()
+    meta["phase"] = "text_uploaded"
+    _save_project_meta(project_id, meta)
+
+    return {
+        "headline": article.headline[:100] if article.headline else "",
+        "body_paragraphs": len(article.body_paragraphs),
+        "total_chars": article.total_chars,
+        "estimated_spreads": estimate.estimated_total_spreads,
+        "pull_quotes": len(article.pull_quotes),
+        "captions": len(article.captions),
+    }
+
+
+@router.post("/api/layout/plan/{project_id}")
+def api_plan_layout(project_id: str, req: PlanRequest = PlanRequest()):
+    """Spustí layout planner na pozadí."""
+    meta = _load_project_meta(project_id)
+
+    if not meta.get("images"):
+        raise HTTPException(400, "Nejdřív nahraj fotky")
+    if not meta.get("article"):
+        raise HTTPException(400, "Nejdřív nahraj text")
+
+    # Už běží?
+    if project_id in _layout_progress and _layout_progress[project_id].get("status") == "running":
+        raise HTTPException(409, "Plánování již běží")
+
+    style_profile = req.style_profile or meta.get("style_profile", "ng_feature")
+    api_key = get_api_key() if req.use_ai else None
+
+    _layout_progress[project_id] = {
+        "status": "running",
+        "stage": "planning",
+        "started_at": time.time(),
+        "message": "Plánuji layout...",
+        "result": None,
+    }
+
+    def run_plan():
+        progress = _layout_progress[project_id]
+        try:
+            from models_layout import ImageInfo, ArticleText
+            from services.layout.layout_planner import plan_layout
+
+            # Rekonstruovat objekty z uloženého JSON
+            images = [ImageInfo(**img) for img in meta["images"]]
+            article = ArticleText(**meta["article"])
+
+            progress["message"] = f"Plánuji layout pro {len(images)} fotek, {article.total_chars} znaků..."
+
+            plan = plan_layout(
+                images=images,
+                text=article,
+                style_profile_id=style_profile,
+                num_pages=req.num_pages,
+                project_id=project_id,
+                use_ai=req.use_ai,
+                api_key=api_key,
+            )
+
+            # Uložit plán
+            plan_data = plan.model_dump()
+            plan_path = _project_dir(project_id) / "layout_plan.json"
+            plan_path.write_text(
+                json.dumps(plan_data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            meta["plan"] = plan_data
+            meta["phase"] = "planned"
+            _save_project_meta(project_id, meta)
+
+            progress["status"] = "done"
+            progress["message"] = f"Layout naplánován: {plan.total_pages} stran, {len(plan.spreads)} spreadů"
+            progress["result"] = {
+                "total_pages": plan.total_pages,
+                "spreads": len(plan.spreads),
+                "spread_types": [s.spread_type for s in plan.spreads],
+                "plan": plan_data,
+            }
+
+        except Exception as e:
+            logger.error(f"Layout planning error: {e}", exc_info=True)
+            progress["status"] = "error"
+            progress["message"] = str(e)
+            progress["result"] = {"error": str(e)}
+
+    thread = threading.Thread(target=run_plan, daemon=True)
+    thread.start()
+
+    return {"status": "started", "message": "Plánování layoutu spuštěno"}
+
+
+@router.get("/api/layout/plan/{project_id}/progress")
+def api_plan_progress(project_id: str):
+    """Polling progress plánování."""
+    progress = _layout_progress.get(project_id)
+    if not progress or progress.get("stage") != "planning":
+        return {"status": "idle"}
+
+    result = {
+        "status": progress["status"],
+        "message": progress.get("message", ""),
+        "elapsed_s": round(time.time() - progress.get("started_at", time.time()), 1),
+    }
+    if progress["status"] in ("done", "error"):
+        result["result"] = progress.get("result")
+    return result
+
+
+@router.post("/api/layout/generate/{project_id}")
+def api_generate_idml(project_id: str, req: GenerateRequest = GenerateRequest()):
+    """Vygeneruje IDML z layout plánu."""
+    meta = _load_project_meta(project_id)
+
+    if not meta.get("plan"):
+        raise HTTPException(400, "Nejdřív spusť plánování")
+
+    # Skeleton IDML
+    skeleton = None
+    if req.skeleton_idml:
+        skeleton = Path(req.skeleton_idml)
+        if not skeleton.exists():
+            raise HTTPException(400, f"Skeleton IDML neexistuje: {req.skeleton_idml}")
+    else:
+        skeleton = _find_skeleton_idml()
+        if not skeleton:
+            raise HTTPException(400, "Žádný skeleton IDML k dispozici. Nahraj IDML vzor nebo zkontroluj input/samples/")
+
+    # Už běží?
+    gen_key = f"{project_id}_gen"
+    if gen_key in _layout_progress and _layout_progress[gen_key].get("status") == "running":
+        raise HTTPException(409, "Generování již běží")
+
+    _layout_progress[gen_key] = {
+        "status": "running",
+        "stage": "generating",
+        "started_at": time.time(),
+        "message": "Generuji IDML...",
+        "result": None,
+    }
+
+    skeleton_str = str(skeleton)
+
+    def run_generate():
+        progress = _layout_progress[gen_key]
+        try:
+            from models_layout import LayoutPlan, ArticleText
+            from services.layout.idml_builder import build_from_plan
+
+            plan = LayoutPlan(**meta["plan"])
+            article = ArticleText(**meta["article"])
+
+            progress["message"] = "Sestavuji text sekce..."
+
+            # Sestavit text_sections mapování
+            text_sections = {}
+            # Headline, deck, byline
+            if article.headline:
+                text_sections["headline"] = article.headline
+            if article.deck:
+                text_sections["deck"] = article.deck
+            if article.byline:
+                text_sections["byline"] = article.byline
+            # Body paragraphs
+            for i, para in enumerate(article.body_paragraphs):
+                text_sections[f"body_{i}"] = para
+            # Captions
+            for i, cap in enumerate(article.captions):
+                text_sections[f"caption_{i}"] = cap
+            # Pull quotes
+            for i, pq in enumerate(article.pull_quotes):
+                text_sections[f"pullquote_{i}"] = pq
+
+            # Image paths per spread
+            image_paths = {}
+            images_dir = _project_dir(project_id) / "images"
+            for spread in plan.spreads:
+                if spread.assigned_images:
+                    spread_imgs = []
+                    for img_filename in spread.assigned_images:
+                        img_path = images_dir / img_filename
+                        if img_path.exists():
+                            spread_imgs.append(str(img_path))
+                        else:
+                            # Zkusit najít podle filename v info
+                            for info in spread.assigned_image_infos or []:
+                                p = Path(info.get("path", "")) if isinstance(info, dict) else Path(info.path)
+                                if p.exists():
+                                    spread_imgs.append(str(p))
+                                    break
+                    if spread_imgs:
+                        image_paths[str(spread.spread_index)] = spread_imgs
+
+            progress["message"] = f"Generuji IDML ({len(plan.spreads)} spreadů)..."
+
+            output_path = _project_dir(project_id) / f"{project_id}.idml"
+            result_path = build_from_plan(
+                layout_plan=plan,
+                skeleton_idml=skeleton_str,
+                output_path=str(output_path),
+                text_sections=text_sections,
+                image_paths=image_paths,
+            )
+
+            # Kopie do exports
+            export_path = EXPORTS_DIR / f"{project_id}.idml"
+            shutil.copy2(result_path, export_path)
+
+            meta["generated_idml"] = str(result_path)
+            meta["phase"] = "generated"
+            _save_project_meta(project_id, meta)
+
+            progress["status"] = "done"
+            progress["message"] = f"IDML vygenerován: {result_path.name}"
+            progress["result"] = {
+                "idml_path": str(result_path),
+                "export_path": str(export_path),
+                "size_kb": round(result_path.stat().st_size / 1024, 1),
+            }
+
+        except Exception as e:
+            logger.error(f"IDML generation error: {e}", exc_info=True)
+            progress["status"] = "error"
+            progress["message"] = str(e)
+            progress["result"] = {"error": str(e)}
+
+    thread = threading.Thread(target=run_generate, daemon=True)
+    thread.start()
+
+    return {"status": "started", "message": "Generování IDML spuštěno"}
+
+
+@router.get("/api/layout/generate/{project_id}/progress")
+def api_generate_progress(project_id: str):
+    """Polling progress generování IDML."""
+    gen_key = f"{project_id}_gen"
+    progress = _layout_progress.get(gen_key)
+    if not progress or progress.get("stage") != "generating":
+        return {"status": "idle"}
+
+    result = {
+        "status": progress["status"],
+        "message": progress.get("message", ""),
+        "elapsed_s": round(time.time() - progress.get("started_at", time.time()), 1),
+    }
+    if progress["status"] in ("done", "error"):
+        result["result"] = progress.get("result")
+    return result
+
+
+@router.get("/api/layout/download/{project_id}")
+def api_download_idml(project_id: str):
+    """Stáhne vygenerovaný IDML."""
+    meta = _load_project_meta(project_id)
+    idml_path = meta.get("generated_idml")
+    if not idml_path or not Path(idml_path).exists():
+        # Zkusit export
+        export_path = EXPORTS_DIR / f"{project_id}.idml"
+        if export_path.exists():
+            idml_path = str(export_path)
+        else:
+            raise HTTPException(404, "IDML ještě nebyl vygenerován")
+
+    return FileResponse(
+        idml_path,
+        media_type="application/octet-stream",
+        filename=f"{project_id}.idml",
+    )
+
+
+@router.post("/api/layout/analyze-template")
+async def api_analyze_template(file: UploadFile = File(...)):
+    """Upload IDML vzoru → analýza template."""
+    if not file.filename or not file.filename.lower().endswith(".idml"):
+        raise HTTPException(400, "Nahraj IDML soubor")
+
+    # Uložit do temp
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".idml", delete=False) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        from services.layout.template_analyzer import analyze_idml
+        analysis = analyze_idml(tmp_path)
+        return {
+            "source_file": file.filename,
+            "analysis": analysis.model_dump(),
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Analýza selhala: {e}")
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+@router.get("/api/layout/templates")
+def api_list_templates():
+    """Seznam dostupných style profiles."""
+    from services.layout.style_profiles import get_all_profiles
+    profiles = get_all_profiles()
+    return {
+        "profiles": [
+            {
+                "id": p.profile_id,
+                "name": p.profile_name,
+                "page_width": p.page_width,
+                "page_height": p.page_height,
+                "columns": p.column_count,
+            }
+            for p in profiles
+        ]
+    }
+
+
+@router.get("/api/layout/patterns")
+def api_list_patterns():
+    """Seznam spread patterns."""
+    from services.layout.spread_patterns import get_all_patterns
+    patterns = get_all_patterns()
+    return {
+        "patterns": [
+            {
+                "id": p.pattern_id,
+                "name": p.pattern_name,
+                "type": p.spread_type,
+                "min_images": p.min_images,
+                "max_images": p.max_images,
+                "slots": len(p.slots),
+                "description": p.description,
+            }
+            for p in patterns
+        ]
+    }

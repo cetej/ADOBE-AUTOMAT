@@ -10,7 +10,7 @@ headline, deck, body, caption, byline, folio, credit, pull_quote.
 Generováno z analýzy 15 IDML souborů květnového čísla NG 05/2026.
 """
 
-from backend.models_layout import StyleInfo, StyleProfile
+from models_layout import StyleInfo, StyleProfile
 
 
 def _build_profiles() -> list[StyleProfile]:

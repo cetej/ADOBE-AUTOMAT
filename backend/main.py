@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from routers import projects, illustrator, extract, translate, export, writeback, pipeline
+from routers import projects, illustrator, extract, translate, export, writeback, pipeline, layout
 
 # Logging
 logging.basicConfig(
@@ -45,6 +45,7 @@ app.include_router(translate.router)
 app.include_router(export.router)
 app.include_router(writeback.router)
 app.include_router(pipeline.router)
+app.include_router(layout.router)
 
 # Serve frontend static files (production build) — MUSI byt posledni (catch-all)
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"

@@ -14,7 +14,7 @@ from math import ceil
 from pathlib import Path
 from typing import Optional
 
-from backend.models_layout import ImageInfo, ImageOrientation, ImagePriority
+from models_layout import ImageInfo, ImageOrientation, ImagePriority
 
 logger = logging.getLogger(__name__)
 

@@ -16,7 +16,7 @@ import re
 from math import ceil
 from typing import Optional
 
-from backend.models_layout import ArticleText, StyleProfile, TextEstimate
+from models_layout import ArticleText, StyleProfile, TextEstimate
 
 logger = logging.getLogger(__name__)
 
