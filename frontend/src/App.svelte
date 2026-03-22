@@ -7,11 +7,28 @@
   import Outputs from './pages/Outputs.svelte';
   import WriteBack from './pages/WriteBack.svelte';
   import { currentProject } from './stores/project.js';
-  import { page as pageStore, goHome as navGoHome, navigate } from './stores/router.js';
+  import { page as pageStore, pendingProjectId, goHome as navGoHome, navigate } from './stores/router.js';
+  import { api } from './lib/api.js';
 
   // Primo subscribe bez $effect — callback nastavi $state
   let currentPage = $state('dashboard');
+  let loadingProject = $state(false);
   pageStore.subscribe(v => { currentPage = v; });
+
+  // Po refreshi — načíst projekt z hash
+  pendingProjectId.subscribe(id => {
+    if (id && !$currentProject) {
+      loadingProject = true;
+      api.getProject(id).then(p => {
+        if (p && p.id) currentProject.set(p);
+      }).catch(() => {
+        // Projekt nenalezen — zpět na dashboard
+        navGoHome();
+      }).finally(() => {
+        loadingProject = false;
+      });
+    }
+  });
 
   function goHome() {
     currentProject.set(null);
@@ -62,7 +79,12 @@
   {/if}
 
   <main class="p-6">
-    {#if currentPage === 'dashboard'}
+    {#if loadingProject}
+      <div class="text-center py-16 text-gray-500">
+        <div class="inline-block w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+        <p class="text-sm">Nacitam projekt...</p>
+      </div>
+    {:else if currentPage === 'dashboard'}
       <Dashboard />
     {:else if currentPage === 'extractor'}
       <Extractor />

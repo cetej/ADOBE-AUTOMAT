@@ -1,0 +1,169 @@
+{
+  "version": "4.2",
+  "title": "DB-FIRST VERIFICATION WORKFLOW",
+  "release_date": "2026-03-19",
+
+  "limits": {
+    "searches_per_article": 20,
+    "searches_per_term": 2,
+    "note": "Většina termínů se řeší lokálně (SpeciesDB 218K+, TermDB 1600+, Ledger 1200+). Web search jen pro zbytek."
+  },
+
+  "local_databases": {
+    "species_db": {
+      "status": "ACTIVE",
+      "location": "../../BIOLIB/species_names.db",
+      "size": "218K+ taxonů, 371K+ jmen",
+      "sources": ["wikidata", "inaturalist", "biolib_scrape"],
+      "lookup": "pre_resolve_species() → tabulka PŘEDBĚŽNĚ OVĚŘENÉ DRUHY",
+      "priority": 1
+    },
+    "term_db": {
+      "status": "ACTIVE",
+      "location": "terminology.db",
+      "size": "1654+ termínů",
+      "lookup": "format_termdb_for_prompt(max_terms=100)",
+      "priority": 2
+    },
+    "global_ledger": {
+      "status": "ACTIVE",
+      "location": "global_ledger.json",
+      "size": "1264+ termínů",
+      "lookup": "format_ledger_for_prompt(max_terms=50)",
+      "priority": 3
+    }
+  },
+
+  "feedback_loop": {
+    "after_phase_3": "extract_terms_to_global_ledger() → dual-write do global_ledger.json + terminology.db",
+    "note": "Online nalezené termíny se automaticky doplňují do DB pro budoucí články"
+  },
+
+  "tier_system": {
+    "biological": {
+      "tier_0": {
+        "source": "SpeciesDB (lokální)",
+        "method": "pre_resolve_species()",
+        "priority": "HIGHEST — 0 searches"
+      },
+      "tier_1": {
+        "source": "biolib.cz + cs.wikipedia.org",
+        "method": "web_search",
+        "query_format": "{EN} český název site:cs.wikipedia.org OR site:biolib.cz",
+        "priority": "Merged query — 1 search"
+      }
+    },
+    "geographical": {
+      "tier_1": {
+        "source": "cs.wikipedia.org",
+        "method": "web_search",
+        "query_format": "{place_name} site:cs.wikipedia.org"
+      }
+    },
+    "medical": {
+      "tier_1": {
+        "source": "wikiskripta.eu",
+        "method": "web_search",
+        "query_format": "{term} site:wikiskripta.eu"
+      }
+    },
+    "films": {
+      "tier_1": {
+        "source": "csfd.cz",
+        "method": "web_search",
+        "query_format": "{film_name} site:csfd.cz"
+      }
+    }
+  },
+
+  "protocols": {
+    "biological": {
+      "steps": [
+        {
+          "id": "DB",
+          "source": "pre_resolve_species()",
+          "purpose": "check_local_db_first",
+          "stop_on_success": true,
+          "searches": 0
+        },
+        {
+          "id": "S1",
+          "query": "{EN} český název site:cs.wikipedia.org OR site:biolib.cz",
+          "purpose": "merged_search",
+          "stop_on_success": true
+        },
+        {
+          "id": "S2",
+          "query": "web_fetch biolib/wiki stránka",
+          "purpose": "disambiguation",
+          "condition": "S1_ambiguous"
+        }
+      ],
+      "max_searches": 2
+    },
+    "geographical": {
+      "steps": [
+        {
+          "id": "S1",
+          "query": "{term} site:cs.wikipedia.org",
+          "purpose": "get_czech_name",
+          "stop_on_success": true
+        }
+      ],
+      "max_searches": 2
+    },
+    "films": {
+      "steps": [
+        {
+          "id": "S1",
+          "query": "{film_name} site:csfd.cz",
+          "purpose": "get_czech_title",
+          "stop_on_success": true
+        }
+      ],
+      "max_searches": 1
+    }
+  },
+
+  "output_format": {
+    "during_verification": {
+      "db_resolved": "DB ✓ {en} → {cz} ({source}, kontext OK) [0s]",
+      "web_verified": "WS ✓ {en} → {lat} → {cz} [{searches}s, T{tier}]",
+      "problematic": "✗ {term} → PROBLÉM: {issue}",
+      "progress": "[{used}/{limit} searches | {db_resolved} DB | {web_verified} web | {unverified} neověřeno]"
+    },
+    "forbidden": [
+      "verbose_multi_line_output",
+      "repeating_search_queries",
+      "searching_for_pre_resolved_terms",
+      "explaining_each_step"
+    ]
+  },
+
+  "stop_triggers": [
+    {
+      "condition": "found_in_local_db",
+      "action": "accept_without_search"
+    },
+    {
+      "condition": "found_on_tier_1",
+      "action": "stop_move_to_next_term"
+    },
+    {
+      "condition": "searches_per_term >= 2",
+      "action": "stop_mark_as_unverified"
+    },
+    {
+      "condition": "total_searches >= 20",
+      "action": "stop_remaining_as_unverified"
+    }
+  ],
+
+  "forbidden_actions": [
+    "searching_for_pre_resolved_terms",
+    "more_than_2_searches_per_term",
+    "continue_after_success",
+    "verbose_output_during_verification",
+    "guess_without_verified_source"
+  ]
+}

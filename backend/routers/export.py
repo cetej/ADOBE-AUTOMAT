@@ -14,6 +14,19 @@ from services.project_store import get_project
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["export"])
 
+# openpyxl odmita kontrolni znaky (Illustrator pouziva \r pro zalomeni)
+import re
+_ILLEGAL_CHARS_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
+
+def _sanitize(value):
+    """Nahrad kontrolni znaky bezpecnymi ekvivalenty pro Excel."""
+    if not isinstance(value, str):
+        return value
+    # \r → \n (Illustrator line breaks)
+    value = value.replace('\r\n', '\n').replace('\r', '\n')
+    # Ostatni kontrolni znaky pryc
+    return _ILLEGAL_CHARS_RE.sub('', value)
+
 
 @router.post("/api/projects/{project_id}/export/{format}")
 async def api_export(project_id: str, format: str):
@@ -79,10 +92,10 @@ def _export_xlsx(project):
 
     # Data
     for row, el in enumerate(project.elements, 2):
-        ws.cell(row=row, column=1, value=el.id)
-        ws.cell(row=row, column=2, value=el.layer_name or el.story_id or "")
-        ws.cell(row=row, column=3, value=el.contents)
-        ws.cell(row=row, column=4, value=el.czech or "")
+        ws.cell(row=row, column=1, value=_sanitize(el.id))
+        ws.cell(row=row, column=2, value=_sanitize(el.layer_name or el.story_id or ""))
+        ws.cell(row=row, column=3, value=_sanitize(el.contents))
+        ws.cell(row=row, column=4, value=_sanitize(el.czech or ""))
         ws.cell(row=row, column=5, value=el.status.value if el.status else "")
         ws.cell(row=row, column=6, value=el.category.value if el.category else "")
 
@@ -170,8 +183,8 @@ def _export_xlsx_grouped(project):
         row += 1
 
         for el in elements:
-            ws.cell(row=row, column=1, value=el.contents)
-            ws.cell(row=row, column=2, value=el.czech or "")
+            ws.cell(row=row, column=1, value=_sanitize(el.contents))
+            ws.cell(row=row, column=2, value=_sanitize(el.czech or ""))
             ws.cell(row=row, column=3, value=el.status.value if el.status else "")
             row += 1
 
@@ -185,8 +198,8 @@ def _export_xlsx_grouped(project):
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
         row += 1
         for el in uncategorized:
-            ws.cell(row=row, column=1, value=el.contents)
-            ws.cell(row=row, column=2, value=el.czech or "")
+            ws.cell(row=row, column=1, value=_sanitize(el.contents))
+            ws.cell(row=row, column=2, value=_sanitize(el.czech or ""))
             ws.cell(row=row, column=3, value=el.status.value if el.status else "")
             row += 1
 

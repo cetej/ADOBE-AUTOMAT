@@ -19,6 +19,17 @@
   let uploadingTranslation = $state(false);
   let dragOverTranslation = $state(false);
 
+  // Pipeline state
+  let pipelineRunning = $state(false);
+  let pipelineProgress = $state('');
+  let pipelineResult = $state(null);
+  let pipelinePhases = $state([3, 4, 5, 6]);  // default: bez fáze 2
+  let pipelineCards = $state({});  // {phase: {status, name, duration_s, tokens, error}}
+  let pipelineChangeLog = $state([]);  // [{id, layer, before, after}]
+  let showChangeLog = $state(false);
+  let showTermDialog = $state(false);
+  let termNotes = $state('');  // uzivatelske poznamky k terminologii
+
   // Unikatni vrstvy, kategorie, statusy pro filtry
   let layers = $derived([...new Set(($currentProject?.elements || []).map(e => e.layer_name).filter(Boolean))].sort());
   let categories = $derived([...new Set(($currentProject?.elements || []).map(e => e.category).filter(Boolean))].sort());
@@ -60,12 +71,12 @@
         czech: editCzech,
         notes: editNotes || null,
       });
-      // Aktualizovat lokalne
-      const idx = $currentProject.elements.findIndex(e => e.id === el.id);
-      if (idx >= 0) {
-        $currentProject.elements[idx] = { ...$currentProject.elements[idx], ...result };
-        currentProject.set($currentProject);
-      }
+      // Aktualizovat lokalne — NOVY objekt aby Svelte detekoval zmenu
+      const proj = $currentProject;
+      const elements = proj.elements.map(e =>
+        e.id === el.id ? { ...e, ...result } : e
+      );
+      currentProject.set({ ...proj, elements });
       editingId = null;
     } catch (e) {
       notify('Chyba ukladani: ' + e.message, 'error');
@@ -78,11 +89,11 @@
     if (!$currentProject) return;
     try {
       const result = await api.updateText($currentProject.id, el.id, { status });
-      const idx = $currentProject.elements.findIndex(e => e.id === el.id);
-      if (idx >= 0) {
-        $currentProject.elements[idx] = { ...$currentProject.elements[idx], ...result };
-        currentProject.set($currentProject);
-      }
+      const proj = $currentProject;
+      const elements = proj.elements.map(e =>
+        e.id === el.id ? { ...e, ...result } : e
+      );
+      currentProject.set({ ...proj, elements });
     } catch (e) {
       notify('Chyba: ' + e.message, 'error');
     }
@@ -92,11 +103,11 @@
     if (!$currentProject) return;
     try {
       const result = await api.updateText($currentProject.id, el.id, { category });
-      const idx = $currentProject.elements.findIndex(e => e.id === el.id);
-      if (idx >= 0) {
-        $currentProject.elements[idx] = { ...$currentProject.elements[idx], ...result };
-        currentProject.set($currentProject);
-      }
+      const proj = $currentProject;
+      const elements = proj.elements.map(e =>
+        e.id === el.id ? { ...e, ...result } : e
+      );
+      currentProject.set({ ...proj, elements });
     } catch (e) {
       notify('Chyba: ' + e.message, 'error');
     }
@@ -151,6 +162,127 @@
       notify(`Translation memory: +${result.added} (celkem ${result.total})`, 'success');
     } catch (e) {
       notify('Chyba: ' + e.message, 'error');
+    }
+  }
+
+  // === Text Pipeline (post-translation phases 2-6) — async + polling ===
+  let pollTimer = null;
+
+  async function runPipeline() {
+    if (!$currentProject) return;
+    const hasTranslated = $currentProject.elements.some(e => e.czech);
+    if (!hasTranslated) {
+      notify('Nejdrive prelozte texty', 'warning');
+      return;
+    }
+    pipelineRunning = true;
+    pipelineResult = null;
+    pipelineChangeLog = [];
+    showChangeLog = false;
+    pipelineCards = {};
+    pipelineProgress = 'Pipeline startuje...';
+
+    const opts = { phases: pipelinePhases };
+    if (termNotes.trim()) {
+      opts.term_notes = termNotes.trim();
+    }
+
+    try {
+      await api.processText($currentProject.id, opts);
+      // Pipeline bezi na pozadi — startni polling
+      startPolling();
+    } catch (e) {
+      // Mozna uz bezi (409) — zkusit polling
+      if (e.message?.includes('již běží') || e.message?.includes('409')) {
+        startPolling();
+      } else {
+        notify('Chyba pipeline: ' + e.message, 'error');
+        pipelineRunning = false;
+        pipelineProgress = '';
+      }
+    }
+  }
+
+  function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(pollProgress, 2000);
+    pollProgress(); // hned prvni
+  }
+
+  async function pollProgress() {
+    if (!$currentProject) return;
+    try {
+      const p = await api.pipelineProgress($currentProject.id);
+
+      if (p.phases) {
+        pipelineCards = p.phases;
+      }
+      if (p.current_phase) {
+        const card = p.phases?.[String(p.current_phase)];
+        const name = card?.name || `Faze ${p.current_phase}`;
+        pipelineProgress = `${name}... (${p.elapsed_s}s)`;
+      }
+
+      if (p.status === 'done' || p.status === 'error') {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        pipelineRunning = false;
+        pipelineProgress = '';
+
+        if (p.status === 'done' && p.result) {
+          pipelineResult = p.result;
+          pipelineChangeLog = p.result.change_log || [];
+          if (p.project) {
+            currentProject.set(p.project);
+          }
+          const ok = p.result.phases?.filter(ph => ph.success).length || 0;
+          const fail = p.result.phases?.filter(ph => !ph.success).length || 0;
+          let msg = `Pipeline: ${ok} fazi OK`;
+          if (fail > 0) msg += `, ${fail} selhalo`;
+          msg += ` | ${p.result.elements_updated || 0} textu upraveno | ${p.result.total_duration_s || 0}s`;
+          notify(msg, fail > 0 ? 'warning' : 'success');
+        } else if (p.status === 'error') {
+          notify('Chyba pipeline: ' + (p.result?.error || 'neznámá'), 'error');
+        }
+      }
+    } catch (e) {
+      // Ignoruj chyby pollingu — zkusi znovu za 2s
+    }
+  }
+
+  // Při vstupu na stránku — zkontroluj jestli pipeline běží
+  let checkedPipelineFor = null;
+  $effect(() => {
+    const id = $currentProject?.id;
+    if (id && id !== checkedPipelineFor) {
+      checkedPipelineFor = id;
+      api.pipelineProgress(id).then(p => {
+        if (p.status === 'running') {
+          pipelineRunning = true;
+          pipelineCards = p.phases || {};
+          pipelineProgress = 'Pipeline běží...';
+          startPolling();
+        }
+      }).catch(() => {});
+    }
+  });
+
+  function togglePhase(phase) {
+    if (pipelinePhases.includes(phase)) {
+      pipelinePhases = pipelinePhases.filter(p => p !== phase);
+    } else {
+      pipelinePhases = [...pipelinePhases, phase].sort();
+    }
+  }
+
+  async function loadChangeLog() {
+    if (!$currentProject) return;
+    try {
+      const res = await api.pipelineChanges($currentProject.id);
+      pipelineChangeLog = res.changes || [];
+      showChangeLog = true;
+    } catch (e) {
+      notify('Nelze nacist protokol: ' + e.message, 'error');
     }
   }
 
@@ -228,6 +360,136 @@
         {/if}
       </div>
     </div>
+
+    <!-- Pipeline panel — post-translation processing -->
+    {#if $currentProject?.elements?.some(e => e.czech)}
+      <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-3 mb-4">
+        <!-- Hlavicka + ovladani -->
+        <div class="flex items-center gap-3">
+          <div class="flex-1">
+            <p class="text-sm font-medium text-indigo-800">Text Pipeline</p>
+            <div class="flex items-center gap-2 mt-1">
+              {#each [[2, 'Uplnost'], [3, 'Terminy'], [4, 'Fakta'], [5, 'Jazyk'], [6, 'Stylistika']] as [num, label]}
+                <label class="inline-flex items-center gap-1 text-xs cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={pipelinePhases.includes(num)}
+                    onchange={() => togglePhase(num)}
+                    disabled={pipelineRunning}
+                    class="w-3 h-3 rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span class="text-indigo-700">{num}: {label}</span>
+                </label>
+              {/each}
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            {#if !pipelineRunning}
+              <button
+                onclick={() => showTermDialog = !showTermDialog}
+                class="px-2 py-1 text-xs font-medium bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 transition-colors"
+                title="Poznamky k terminologii"
+              >Terminy?</button>
+            {/if}
+            {#if pipelineRunning}
+              <span class="text-xs text-indigo-600 animate-pulse">{pipelineProgress}</span>
+            {:else}
+              <button
+                onclick={runPipeline}
+                disabled={pipelinePhases.length === 0}
+                class="px-4 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
+              >Spustit pipeline</button>
+            {/if}
+          </div>
+        </div>
+
+        <!-- Dialog pro terminologii -->
+        {#if showTermDialog}
+          <div class="mt-2 bg-amber-50 border border-amber-200 rounded-lg p-2">
+            <p class="text-xs font-medium text-amber-800 mb-1">Poznamky k prekladu terminu</p>
+            <p class="text-xs text-amber-600 mb-1">Specifikujte nejasne terminy, preferovane preklady, kontext...</p>
+            <textarea
+              bind:value={termNotes}
+              class="w-full text-xs border border-amber-300 rounded p-2 h-16 resize-y focus:outline-none focus:ring-1 focus:ring-amber-400"
+              placeholder='Napr: "Harappan" = Harappska (civilizace), "Indus" = Indus (reka, neprekladat)'
+            ></textarea>
+          </div>
+        {/if}
+
+        <!-- Karty fazi — live progress -->
+        {#if Object.keys(pipelineCards).length > 0}
+          <div class="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {#each Object.entries(pipelineCards).sort((a,b) => a[0]-b[0]) as [phase, card]}
+              <div class="rounded-lg p-2 text-xs border
+                {card.status === 'waiting' ? 'bg-gray-50 border-gray-200 text-gray-500' :
+                 card.status === 'running' ? 'bg-blue-50 border-blue-300 text-blue-700' :
+                 card.status === 'done' && card.success !== false ? 'bg-green-50 border-green-300 text-green-700' :
+                 'bg-red-50 border-red-300 text-red-700'}">
+                <div class="font-medium flex items-center gap-1">
+                  {#if card.status === 'running'}
+                    <span class="inline-block w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>
+                  {:else if card.status === 'done' && card.success !== false}
+                    <span class="text-green-600">&#10003;</span>
+                  {:else if card.status === 'failed' || card.success === false}
+                    <span class="text-red-600">&#10007;</span>
+                  {:else}
+                    <span class="text-gray-400">&#9679;</span>
+                  {/if}
+                  {phase}: {card.name}
+                </div>
+                {#if card.duration_s}
+                  <div class="text-[10px] mt-0.5 opacity-75">{card.duration_s}s{#if card.tokens}, {card.tokens} tok{/if}</div>
+                {/if}
+                {#if card.error}
+                  <div class="text-[10px] mt-0.5 text-red-600 truncate" title={card.error}>{card.error}</div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+        <!-- Vysledky + protokol oprav -->
+        {#if pipelineResult && !pipelineRunning}
+          <div class="mt-2 flex items-center gap-2 text-xs text-indigo-700">
+            <span>{pipelineResult.elements_updated || 0} textu upraveno</span>
+            <span class="text-gray-300">|</span>
+            <span>{pipelineResult.total_tokens || 0} tokenu</span>
+            <span class="text-gray-300">|</span>
+            <span>{pipelineResult.total_duration_s || 0}s</span>
+            {#if pipelineChangeLog.length > 0}
+              <button
+                onclick={() => showChangeLog = !showChangeLog}
+                class="ml-auto px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded hover:bg-indigo-200 transition-colors"
+              >{showChangeLog ? 'Skryt' : 'Zobrazit'} protokol ({pipelineChangeLog.length})</button>
+            {/if}
+          </div>
+        {/if}
+
+        <!-- Protokol oprav -->
+        {#if showChangeLog && pipelineChangeLog.length > 0}
+          <div class="mt-2 bg-white border border-indigo-200 rounded-lg max-h-64 overflow-y-auto">
+            <table class="w-full text-xs">
+              <thead class="bg-indigo-50 sticky top-0">
+                <tr>
+                  <th class="px-2 py-1 text-left text-indigo-700 font-medium w-32">Element</th>
+                  <th class="px-2 py-1 text-left text-indigo-700 font-medium">Pred</th>
+                  <th class="px-2 py-1 text-left text-indigo-700 font-medium">Po</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-indigo-100">
+                {#each pipelineChangeLog as ch}
+                  <tr class="hover:bg-indigo-50/50">
+                    <td class="px-2 py-1 text-gray-500 truncate max-w-[120px]" title={ch.id}>{ch.id}</td>
+                    <td class="px-2 py-1 text-red-600/70 font-mono line-through">{ch.before}</td>
+                    <td class="px-2 py-1 text-green-700 font-mono font-medium">{ch.after}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </div>
+    {/if}
 
     <!-- Panel prekladu — IDML bez prekladu -->
     {#if $currentProject?.type === 'idml' && $currentProject?.elements?.length > 0}

@@ -47,12 +47,19 @@ def extract_from_illustrator(timeout: int = 120) -> dict:
                 result = item["text"]
                 break
 
-    # Vysledek muze byt string (JSON) nebo uz dict
-    if isinstance(result, str):
+    # Vysledek muze byt string (JSON) nebo uz dict — proxy nekdy double-encoduje
+    # Illustrator pouziva \r pro zalomeni radku — raw control chars rozbiji JSON parser
+    while isinstance(result, str):
         try:
             result = json.loads(result)
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Invalid JSON from Illustrator: {e}\nRaw: {result[:500]}")
+        except json.JSONDecodeError:
+            # Escapovat raw control chars (\r, \n, \t) a zkusit znovu
+            import re
+            cleaned = re.sub(r'[\x00-\x1f]', lambda m: f'\\u{ord(m.group()):04x}', result)
+            try:
+                result = json.loads(cleaned)
+            except json.JSONDecodeError as e:
+                raise RuntimeError(f"Invalid JSON from Illustrator: {e}\nRaw: {result[:500]}")
 
     if isinstance(result, dict) and "error" in result:
         raise RuntimeError(f"ExtendScript error: {result['error']} (line {result.get('line', '?')})")
@@ -91,6 +98,13 @@ def raw_to_elements(raw_layers: list[dict]) -> list[TextElement]:
             contents = text.get("contents", "").strip()
             if not contents:
                 continue
+            # Illustrator pouziva \r pro zalomeni radku v textovych ramcich
+            # a nekdy i jine kontrolni znaky (\x03 apod.)
+            # Nahradime je \n — pro preklad a zobrazeni je to spravne,
+            # pri writebacku do Illustratoru se \n → \r konvertuje zpet
+            contents = contents.replace('\r\n', '\n').replace('\r', '\n')
+            import re
+            contents = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', ' ', contents)
 
             elem_id = f"{layer_name}/{text.get('index', 0)}"
             # Deduplikace — vrstvy se stejnym jmenem dostanou layerId suffix

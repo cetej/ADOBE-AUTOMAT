@@ -75,6 +75,13 @@ export const api = {
   translate: (id, opts = {}) => request('POST', `/projects/${id}/translate`, opts),
   saveTM: (id) => request('POST', `/projects/${id}/translate/save-tm`),
 
+  // Text Pipeline — spuštění (vrátí okamžitě, běží na pozadí)
+  processText: (id, opts = {}) => request('POST', `/projects/${id}/process-text`, opts),
+  // Polling průběhu pipeline
+  pipelineProgress: (id) => request('GET', `/projects/${id}/process-text/progress`),
+  // Protokol změn
+  pipelineChanges: (id) => request('GET', `/projects/${id}/pipeline-changes`),
+
   // Export
   exportFile: (id, format) => request('POST', `/projects/${id}/export/${format}`),
 
