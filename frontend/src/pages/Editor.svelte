@@ -16,6 +16,10 @@
   let saving = $state(false);
   let translating = $state(false);
   let translateProgress = $state('');
+  let translateBatch = $state(0);
+  let translateTotalBatches = $state(0);
+  let translateFromMemory = $state(0);
+  let translateHasBackgrounder = $state(false);
   let uploadingTranslation = $state(false);
   let dragOverTranslation = $state(false);
 
@@ -117,16 +121,19 @@
     if (!$currentProject) return;
     translating = true;
     const untranslated = $currentProject.elements.filter(e => !e.czech && e.contents.trim()).length;
-    translateProgress = overwrite ? 'Prekladam vsechny...' : `Prekladam ${untranslated} neprelozených...`;
+    translateProgress = overwrite ? 'Spoustim preklad vsech...' : `Spoustim preklad ${untranslated} textu...`;
     try {
-      const result = await api.translate($currentProject.id, { overwrite });
-      if (result.project) {
-        currentProject.set(result.project);
+      const startResult = await api.translate($currentProject.id, { overwrite });
+      if (startResult.status === 'done') {
+        notify(startResult.message || 'Zadne texty k prekladu', 'info');
+        translating = false;
+        translateProgress = '';
+        return;
       }
-      notify(`Prelozeno ${result.translated} textu`, 'success');
+      translateHasBackgrounder = startResult.has_backgrounder || false;
+      await _pollTranslateProgress();
     } catch (e) {
       notify('Chyba prekladu: ' + e.message, 'error');
-    } finally {
       translating = false;
       translateProgress = '';
     }
@@ -140,18 +147,64 @@
       return;
     }
     translating = true;
-    translateProgress = `Prekladam ${ids.length} filtrovaných...`;
+    translateProgress = `Spoustim preklad ${ids.length} textu...`;
     try {
-      const result = await api.translate($currentProject.id, { ids });
-      if (result.project) {
-        currentProject.set(result.project);
+      const startResult = await api.translate($currentProject.id, { ids });
+      if (startResult.status === 'done') {
+        notify(startResult.message || 'Zadne texty k prekladu', 'info');
+        translating = false;
+        translateProgress = '';
+        return;
       }
-      notify(`Prelozeno ${result.translated} textu`, 'success');
+      translateHasBackgrounder = startResult.has_backgrounder || false;
+      await _pollTranslateProgress();
     } catch (e) {
       notify('Chyba prekladu: ' + e.message, 'error');
-    } finally {
       translating = false;
       translateProgress = '';
+    }
+  }
+
+  async function _pollTranslateProgress() {
+    const id = $currentProject?.id;
+    if (!id) return;
+    while (true) {
+      await new Promise(r => setTimeout(r, 1500));
+      try {
+        const p = await api.translateProgress(id);
+        if (p.status === 'running') {
+          translateBatch = p.batch || 0;
+          translateTotalBatches = p.total_batches || 0;
+          translateFromMemory = p.from_memory || 0;
+          if (translateTotalBatches > 0) {
+            translateProgress = `Batch ${translateBatch}/${translateTotalBatches}`;
+          }
+        } else if (p.status === 'done') {
+          if (p.project) currentProject.set(p.project);
+          const parts = [`Prelozeno ${p.translated} textu`];
+          if (p.from_memory > 0) parts.push(`${p.from_memory} z TM`);
+          if (p.typo_corrected > 0) parts.push(`${p.typo_corrected} typografie`);
+          if (translateHasBackgrounder) parts.push('s backgrounderem');
+          notify(parts.join(', '), 'success');
+          translating = false;
+          translateProgress = '';
+          return;
+        } else if (p.status === 'error') {
+          notify('Chyba prekladu: ' + (p.error || 'neznama'), 'error');
+          translating = false;
+          translateProgress = '';
+          return;
+        } else if (p.status === 'idle') {
+          translating = false;
+          translateProgress = '';
+          return;
+        }
+      } catch (e) {
+        notify('Chyba polling: ' + e.message, 'error');
+        translating = false;
+        translateProgress = '';
+        return;
+      }
     }
   }
 
@@ -339,7 +392,32 @@
       <h1 class="text-2xl font-bold text-gray-900">Prekladovy editor</h1>
       <div class="flex items-center gap-2">
         {#if translating}
-          <span class="text-sm text-blue-600 animate-pulse">{translateProgress}</span>
+          <div class="flex items-center gap-3 min-w-[300px]">
+            <!-- Progress bar -->
+            <div class="flex-1 bg-gray-200 rounded-full h-2.5 overflow-hidden">
+              <div
+                class="bg-violet-600 h-2.5 rounded-full transition-all duration-500"
+                style="width: {translateTotalBatches > 0 ? Math.round((translateBatch / translateTotalBatches) * 100) : 0}%"
+              ></div>
+            </div>
+            <div class="flex flex-col items-end gap-0.5 text-xs whitespace-nowrap">
+              <span class="text-violet-700 font-medium">
+                {#if translateTotalBatches > 0}
+                  Batch {translateBatch}/{translateTotalBatches}
+                {:else}
+                  <span class="animate-pulse">Spoustim...</span>
+                {/if}
+              </span>
+              <div class="flex gap-2 text-gray-500">
+                {#if translateFromMemory > 0}
+                  <span title="Preklady z Translation Memory">TM: {translateFromMemory}</span>
+                {/if}
+                {#if translateHasBackgrounder}
+                  <span class="text-emerald-600" title="Preklad pouziva backgrounder z PDF">PDF</span>
+                {/if}
+              </div>
+            </div>
+          </div>
         {:else}
           <button
             onclick={() => translateAll(false)}

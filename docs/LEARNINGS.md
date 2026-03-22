@@ -4,6 +4,17 @@ Poučení z vývoje. Nejnovější záznamy nahoře.
 
 ---
 
+## 2026-03-22 — PDF matcher NIKDY nepřepisuje contents
+
+**Problém:** PDF source matcher přímo přepisoval `contents` u single-element stories. Nízký práh similarity (0.3) způsobil chybné párování — titulek mapy dostal obsah z jiné story. 5 elementů přepsáno špatným textem.
+
+**Řešení:**
+- PDF matcher NIKDY nepíše do `contents` — vše do `notes` jako `[PDF UPDATE]` pro manuální review
+- Práh similarity zvýšen z 0.3 na 0.5
+- **Pravidlo:** Automatický import z externího zdroje nesmí destruktivně přepisovat primární data.
+
+---
+
 ## 2026-03-07 — ExtendScript: Deep textFrames collection
 
 ### layer.textFrames je HLUBOKÁ kolekce

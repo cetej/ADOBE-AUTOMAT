@@ -111,6 +111,8 @@ class Project(BaseModel):
     # IDML specificke
     idml_path: Optional[str] = None
     translation_doc: Optional[str] = None
+    source_pdf: Optional[str] = None
+    backgrounder: Optional[str] = None
     issues: list[dict] = []
 
 

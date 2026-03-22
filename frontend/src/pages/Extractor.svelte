@@ -26,14 +26,18 @@
 
   // IDML state
   let uploadingIdml = $state(false);
+  let uploadingSourcePdf = $state(false);
   let uploadingTranslation = $state(false);
   let idmlUploaded = $state(false);
+  let sourcePdfUploaded = $state(false);
+  let sourcePdfStats = $state(null);
   let translationUploaded = $state(false);
 
   // Sync IDML state from project
   $effect(() => {
     if ($currentProject?.type === 'idml') {
       idmlUploaded = !!$currentProject.idml_path;
+      sourcePdfUploaded = !!$currentProject.source_pdf;
       translationUploaded = !!$currentProject.translation_doc;
     }
   });
@@ -71,6 +75,24 @@
     }
   }
 
+  async function handleSourcePdfUpload(file) {
+    if (!$currentProject) return;
+    uploadingSourcePdf = true;
+    try {
+      const result = await api.uploadSourcePdf($currentProject.id, file);
+      sourcePdfStats = result.pdf_match_stats || null;
+      currentProject.set(result);
+      sourcePdfUploaded = true;
+      const updated = sourcePdfStats?.updated || 0;
+      const matched = sourcePdfStats?.matched || 0;
+      notify(`PDF nahrano: ${matched} bloku sparovano, ${updated} textu aktualizovano`, 'success');
+    } catch (e) {
+      notify('Chyba uploadu PDF: ' + e.message, 'error');
+    } finally {
+      uploadingSourcePdf = false;
+    }
+  }
+
   async function handleTranslationUpload(file) {
     if (!$currentProject) return;
     uploadingTranslation = true;
@@ -86,6 +108,8 @@
     }
   }
 
+  let extracted = $derived($currentProject?.elements?.length > 0);
+
   async function extractIdml() {
     if (!$currentProject) return;
     extracting = true;
@@ -93,7 +117,6 @@
       const result = await api.extract($currentProject.id);
       currentProject.set(result);
       notify(`Extrahovano ${result.elements?.length || 0} textu z IDML`, 'success');
-      navigate('editor');
     } catch (e) {
       notify('Chyba extrakce IDML: ' + e.message, 'error');
     } finally {
@@ -201,16 +224,84 @@
         {/if}
       </div>
 
-      <!-- Step 2: Upload translation (optional) -->
+      <!-- Step 2: Extract -->
       <div class="bg-white rounded-xl border border-gray-200 p-6">
         <div class="flex items-center gap-3 mb-4">
-          <span class="flex-shrink-0 w-8 h-8 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center font-bold text-sm">2</span>
+          <span class="flex-shrink-0 w-8 h-8 rounded-full {idmlUploaded ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-400'} flex items-center justify-center font-bold text-sm">2</span>
+          <h2 class="text-lg font-semibold {idmlUploaded ? '' : 'text-gray-400'}">Extrahovat texty</h2>
+          {#if extracted}
+            <span class="ml-auto text-green-600 text-sm font-medium">{$currentProject.elements.length} elementu</span>
+          {/if}
+        </div>
+        <p class="text-sm text-gray-500 mb-4">
+          Rozparsuje Story XML soubory a extrahuje textove elementy (bez master pages).
+        </p>
+        <button
+          class="px-6 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+          onclick={extractIdml}
+          disabled={!idmlUploaded || extracting}
+        >
+          {extracting ? 'Extrahuji...' : extracted ? 'Znovu extrahovat' : 'Spustit extrakci'}
+        </button>
+        {#if extracting}
+          <div class="mt-4">
+            <div class="w-full bg-gray-200 rounded-full h-2">
+              <div class="bg-blue-600 h-2 rounded-full transition-all animate-pulse" style="width: 60%"></div>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">Parsovani Story XML...</p>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Step 3: Upload source PDF (optional, needs extracted elements) -->
+      <div class="bg-white rounded-xl border border-gray-200 p-6 {extracted ? '' : 'opacity-50'}">
+        <div class="flex items-center gap-3 mb-4">
+          <span class="flex-shrink-0 w-8 h-8 rounded-full {extracted ? 'bg-gray-100 text-gray-600' : 'bg-gray-100 text-gray-400'} flex items-center justify-center font-bold text-sm">3</span>
+          <h2 class="text-lg font-semibold">Nahrat zdrojove PDF <span class="text-sm font-normal text-gray-400">(volitelne)</span></h2>
+          {#if sourcePdfUploaded}
+            <span class="ml-auto text-green-600 text-sm font-medium">Nahrano</span>
+          {/if}
+        </div>
+        <p class="text-xs text-gray-500 mb-3">
+          RTT/backgrounder PDF — aktualizuje texty z IDML na nejnovejsi verzi + ulozi backgrounder pro kontext prekladu.
+        </p>
+        {#if !extracted}
+          <p class="text-xs text-orange-500">Nejprve extrahujte texty z IDML (krok 2).</p>
+        {:else if sourcePdfUploaded && !uploadingSourcePdf}
+          <div class="flex items-center justify-between">
+            <p class="text-sm text-green-600">
+              Soubor: {$currentProject.source_pdf?.split(/[\\/]/).pop() || 'nahran'}
+              {#if sourcePdfStats}
+                <span class="text-gray-500 ml-2">({sourcePdfStats.matched} sparovano, {sourcePdfStats.updated} aktualizovano)</span>
+              {/if}
+            </p>
+            <button
+              class="text-xs text-blue-600 hover:text-blue-800 underline"
+              onclick={() => { sourcePdfUploaded = false; sourcePdfStats = null; }}
+            >Zmenit soubor</button>
+          </div>
+        {:else}
+          <FileUpload
+            accept=".pdf"
+            label="Vyberte zdrojove PDF (RTT)"
+            onupload={handleSourcePdfUpload}
+            bind:uploading={uploadingSourcePdf}
+          />
+        {/if}
+      </div>
+
+      <!-- Step 4: Upload translation (optional, needs extracted elements) -->
+      <div class="bg-white rounded-xl border border-gray-200 p-6 {extracted ? '' : 'opacity-50'}">
+        <div class="flex items-center gap-3 mb-4">
+          <span class="flex-shrink-0 w-8 h-8 rounded-full {extracted ? 'bg-gray-100 text-gray-600' : 'bg-gray-100 text-gray-400'} flex items-center justify-center font-bold text-sm">4</span>
           <h2 class="text-lg font-semibold">Nahrat CZ preklad <span class="text-sm font-normal text-gray-400">(volitelne)</span></h2>
           {#if translationUploaded}
             <span class="ml-auto text-green-600 text-sm font-medium">Nahrano</span>
           {/if}
         </div>
-        {#if translationUploaded && !uploadingTranslation}
+        {#if !extracted}
+          <p class="text-xs text-orange-500">Nejprve extrahujte texty z IDML (krok 2).</p>
+        {:else if translationUploaded && !uploadingTranslation}
           <div class="flex items-center justify-between">
             <p class="text-sm text-green-600">
               Soubor: {$currentProject.translation_doc?.split('/').pop() || 'nahran'}
@@ -230,31 +321,17 @@
         {/if}
       </div>
 
-      <!-- Step 3: Extract -->
-      <div class="bg-white rounded-xl border border-gray-200 p-6">
-        <div class="flex items-center gap-3 mb-4">
-          <span class="flex-shrink-0 w-8 h-8 rounded-full {idmlUploaded ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-400'} flex items-center justify-center font-bold text-sm">3</span>
-          <h2 class="text-lg font-semibold {idmlUploaded ? '' : 'text-gray-400'}">Extrahovat texty</h2>
+      <!-- Navigate to editor -->
+      {#if extracted}
+        <div class="text-center">
+          <button
+            class="px-6 py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors"
+            onclick={() => navigate('editor')}
+          >
+            Prejit do editoru ({$currentProject.elements.length} elementu)
+          </button>
         </div>
-        <p class="text-sm text-gray-500 mb-4">
-          Rozparsuje Story XML soubory a extrahuje vsechny textove elementy.
-        </p>
-        <button
-          class="px-6 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
-          onclick={extractIdml}
-          disabled={!idmlUploaded || extracting}
-        >
-          {extracting ? 'Extrahuji...' : 'Spustit extrakci'}
-        </button>
-        {#if extracting}
-          <div class="mt-4">
-            <div class="w-full bg-gray-200 rounded-full h-2">
-              <div class="bg-blue-600 h-2 rounded-full transition-all animate-pulse" style="width: 60%"></div>
-            </div>
-            <p class="text-xs text-gray-500 mt-1">Parsovani Story XML...</p>
-          </div>
-        {/if}
-      </div>
+      {/if}
     </div>
   {/if}
 </div>

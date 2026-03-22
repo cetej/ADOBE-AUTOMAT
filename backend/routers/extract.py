@@ -200,6 +200,66 @@ async def api_upload_translation(project_id: str, file: UploadFile = File(...)):
     return response
 
 
+# === Upload zdrojoveho PDF ===
+
+@router.post("/api/projects/{project_id}/upload-source-pdf")
+async def api_upload_source_pdf(project_id: str, file: UploadFile = File(...)):
+    """Upload zdrojoveho anglickeho PDF (RTT). Aktualizuje texty + ulozi backgrounder."""
+    project = get_project(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    if project.type != ProjectType.IDML:
+        raise HTTPException(400, "Source PDF upload is only for IDML projects")
+
+    if not project.elements:
+        raise HTTPException(422, "No IDML elements extracted yet. Extract IDML first.")
+
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "File must have .pdf extension")
+
+    # Ulozit soubor
+    project_upload_dir = UPLOADS_DIR / project_id
+    project_upload_dir.mkdir(parents=True, exist_ok=True)
+
+    dest = project_upload_dir / file.filename
+    with open(dest, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    project.source_pdf = str(dest)
+
+    # Parsovat PDF a matchovat s IDML
+    match_stats = None
+    try:
+        from services.pdf_source_parser import parse_source_pdf
+        from services.pdf_source_matcher import match_pdf_to_idml
+
+        pdf_result = parse_source_pdf(dest)
+
+        # Ulozit backgrounder pro kontext prekladu
+        if pdf_result.backgrounder_text:
+            project.backgrounder = pdf_result.backgrounder_text
+            logger.info("Backgrounder extracted: %d pages, %d chars",
+                        pdf_result.backgrounder_pages, len(project.backgrounder))
+
+        # Matchovat a aktualizovat texty
+        match_stats = match_pdf_to_idml(project.elements, pdf_result)
+
+        logger.info("PDF source matching: %d matched, %d updated, %d paragraphs",
+                    match_stats["matched"], match_stats["updated"],
+                    match_stats["total_paragraphs"])
+    except Exception as e:
+        logger.error("PDF source processing failed: %s", e, exc_info=True)
+
+    save_project(project)
+
+    response = project.model_dump()
+    if match_stats:
+        response["pdf_match_stats"] = match_stats
+    return response
+
+
 # === Kategorizace ===
 
 @router.post("/api/projects/{project_id}/categorize")

@@ -3,6 +3,7 @@
 import sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+import asyncio
 import logging
 from fastapi import APIRouter, HTTPException
 
@@ -24,6 +25,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["translate"])
+
+# Progress tracking per project
+_translate_progress: dict[str, dict] = {}
 
 
 @router.put("/api/projects/{project_id}/texts/{text_id:path}")
@@ -72,8 +76,7 @@ async def api_bulk_update(project_id: str, update: BulkTextUpdate):
 
 @router.post("/api/projects/{project_id}/translate")
 async def api_translate(project_id: str, req: TranslateRequest = TranslateRequest()):
-    """AI preklad textu pomoci Claude API."""
-    # Overit API klic
+    """AI preklad textu pomoci Claude API — bezi na pozadi s progress tracking."""
     if not get_api_key():
         raise HTTPException(
             400,
@@ -94,61 +97,123 @@ async def api_translate(project_id: str, req: TranslateRequest = TranslateReques
         elements = [e for e in project.elements if e.contents.strip() and not e.czech]
 
     if not elements:
-        return {"translated": 0, "message": "Zadne texty k prekladu"}
+        return {"translated": 0, "message": "Zadne texty k prekladu", "status": "done"}
 
-    # Prelozit
-    try:
-        results = translate_batch(
-            elements=elements,
-            project_type=project.type,
-            model=req.model,
-        )
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        logger.error("Chyba prekladu: %s", e)
-        raise HTTPException(500, f"Chyba prekladu: {e}")
+    # Zjisti jestli ma backgrounder
+    has_backgrounder = bool(project.backgrounder)
 
-    # Aplikovat preklady do projektu
-    result_map = {r["id"]: r["czech"] for r in results}
-    applied = 0
-    for elem in project.elements:
-        if elem.id in result_map:
-            elem.czech = result_map[elem.id]
-            elem.auto_translated = True
-            if not elem.status:
-                elem.status = TextStatus.OVERIT
-            applied += 1
+    # Inicializuj progress
+    _translate_progress[project_id] = {
+        "status": "running",
+        "batch": 0,
+        "total_batches": 0,
+        "from_memory": 0,
+        "total_elements": len(elements),
+        "translated": 0,
+        "has_backgrounder": has_backgrounder,
+        "error": None,
+    }
 
-    # Phase 4.5: CzechCorrector — typography auto-fix na přeložených textech
-    corrected_count = 0
-    if _CORRECTOR_AVAILABLE and applied > 0:
-        try:
-            corrector = CzechCorrector()
-            for elem in project.elements:
-                if elem.czech and elem.id in result_map:
-                    result_c = corrector.correct(
-                        elem.czech,
-                        fix_typography=True,
-                        check_spelling=False,
-                        check_rules=False,
-                    )
-                    if result_c.auto_count > 0:
-                        elem.czech = result_c.text
-                        corrected_count += 1
-            corrector.close()
-        except Exception as e:
-            logger.warning("CzechCorrector: %s", e)
-
-    save_project(project)
+    # Spust preklad na pozadi
+    asyncio.get_running_loop().run_in_executor(
+        None,
+        _run_translation,
+        project_id, elements, project.type, req.model,
+        project.backgrounder, req.overwrite,
+    )
 
     return {
-        "translated": applied,
-        "total_requested": len(elements),
-        "from_memory": sum(1 for _ in results) - applied if len(results) > applied else 0,
-        "typo_corrected": corrected_count,
-        "project": project,
+        "status": "started",
+        "total_elements": len(elements),
+        "has_backgrounder": has_backgrounder,
     }
+
+
+def _run_translation(project_id, elements, project_type, model, backgrounder, overwrite):
+    """Synchronni preklad bezici v thread poolu."""
+    try:
+        def on_progress(batch_num, total_batches, from_memory_count):
+            _translate_progress[project_id].update({
+                "batch": batch_num,
+                "total_batches": total_batches,
+                "from_memory": from_memory_count,
+            })
+
+        results = translate_batch(
+            elements=elements,
+            project_type=project_type,
+            model=model,
+            backgrounder=backgrounder,
+            progress_callback=on_progress,
+        )
+
+        # Aplikovat preklady
+        project = get_project(project_id)
+        result_map = {r["id"]: r["czech"] for r in results}
+        applied = 0
+        for elem in project.elements:
+            if elem.id in result_map:
+                elem.czech = result_map[elem.id]
+                elem.auto_translated = True
+                if not elem.status:
+                    elem.status = TextStatus.OVERIT
+                applied += 1
+
+        # CzechCorrector
+        corrected_count = 0
+        if _CORRECTOR_AVAILABLE and applied > 0:
+            try:
+                corrector = CzechCorrector()
+                for elem in project.elements:
+                    if elem.czech and elem.id in result_map:
+                        result_c = corrector.correct(
+                            elem.czech,
+                            fix_typography=True,
+                            check_spelling=False,
+                            check_rules=False,
+                        )
+                        if result_c.auto_count > 0:
+                            elem.czech = result_c.text
+                            corrected_count += 1
+                corrector.close()
+            except Exception as e:
+                logger.warning("CzechCorrector: %s", e)
+
+        save_project(project)
+
+        from_memory = _translate_progress[project_id].get("from_memory", 0)
+        _translate_progress[project_id].update({
+            "status": "done",
+            "translated": applied,
+            "from_memory": from_memory,
+            "typo_corrected": corrected_count,
+        })
+        logger.info("Preklad dokoncen: %d prelozeno, %d z TM, %d typografie",
+                    applied, from_memory, corrected_count)
+
+    except Exception as e:
+        logger.error("Chyba prekladu: %s", e, exc_info=True)
+        _translate_progress[project_id].update({
+            "status": "error",
+            "error": str(e),
+        })
+
+
+@router.get("/api/projects/{project_id}/translate/progress")
+async def api_translate_progress(project_id: str):
+    """Polling progress prekladu."""
+    progress = _translate_progress.get(project_id)
+    if not progress:
+        return {"status": "idle"}
+    # Po dokonceni vrat projekt a smaz progress
+    if progress["status"] in ("done", "error"):
+        result = dict(progress)
+        if progress["status"] == "done":
+            project = get_project(project_id)
+            result["project"] = project
+        del _translate_progress[project_id]
+        return result
+    return progress
 
 
 @router.post("/api/projects/{project_id}/translate/save-tm")

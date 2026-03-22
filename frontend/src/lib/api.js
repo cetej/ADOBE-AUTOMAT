@@ -62,6 +62,20 @@ export const api = {
     return res.json();
   },
 
+  uploadSourcePdf: async (id, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${BASE}/projects/${id}/upload-source-pdf`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+  },
+
   // Texts
   updateText: (projectId, textId, data) =>
     request('PUT', `/projects/${projectId}/texts/${encodeURIComponent(textId)}`, data),
@@ -73,6 +87,7 @@ export const api = {
 
   // Translate
   translate: (id, opts = {}) => request('POST', `/projects/${id}/translate`, opts),
+  translateProgress: (id) => request('GET', `/projects/${id}/translate/progress`),
   saveTM: (id) => request('POST', `/projects/${id}/translate/save-tm`),
 
   // Text Pipeline — spuštění (vrátí okamžitě, běží na pozadí)

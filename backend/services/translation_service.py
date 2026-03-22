@@ -178,6 +178,8 @@ def translate_batch(
     project_type: str = "idml",
     model: str = "claude-sonnet-4-20250514",
     max_batch: int = 25,
+    backgrounder: str | None = None,
+    progress_callback=None,
 ) -> list[dict]:
     """Prelozi batch elementu pomoci Claude API.
 
@@ -186,13 +188,11 @@ def translate_batch(
         project_type: 'map' nebo 'idml' pro kontextovy prompt
         model: Claude model ID
         max_batch: Max pocet elementu v jednom API volani
+        backgrounder: Backgrounder text z PDF pro kontext prekladu
+        progress_callback: Volitelny callback(batch_num, total_batches, from_memory_count)
 
     Returns:
         list[dict]: [{"id": "...", "czech": "..."}] — uspesne preklady
-
-    Raises:
-        ValueError: Pokud neni nastaven API klic
-        anthropic.APIError: Pri chybe API
     """
     api_key = get_api_key()
     if not api_key:
@@ -216,6 +216,11 @@ def translate_batch(
     if from_memory:
         logger.info("Translation memory: %d/%d z cache", len(from_memory), len(elements))
 
+    total_batches = max(1, (len(to_translate) + max_batch - 1) // max_batch) if to_translate else 0
+
+    if progress_callback:
+        progress_callback(0, total_batches, len(from_memory))
+
     if not to_translate:
         return from_memory
 
@@ -224,8 +229,13 @@ def translate_batch(
     all_results = list(from_memory)
 
     for i in range(0, len(to_translate), max_batch):
+        batch_num = i // max_batch + 1
         batch = to_translate[i:i + max_batch]
-        results = _translate_api_call(client, batch, project_type, model)
+
+        if progress_callback:
+            progress_callback(batch_num, total_batches, len(from_memory))
+
+        results = _translate_api_call(client, batch, project_type, model, backgrounder)
         all_results.extend(results)
 
     return all_results
@@ -300,6 +310,7 @@ def _translate_api_call(
     elements: list[TextElement],
     project_type: str,
     model: str,
+    backgrounder: str | None = None,
 ) -> list[dict]:
     """Jedno API volani pro batch elementu."""
     # Sestavit user prompt
@@ -322,8 +333,21 @@ def _translate_api_call(
         f"```json\n{json.dumps(items, ensure_ascii=False, indent=2)}\n```"
     )
 
-    # System prompt + term hints
-    system = SYSTEM_PROMPT + term_hints if term_hints else SYSTEM_PROMPT
+    # System prompt + term hints + backgrounder
+    system = SYSTEM_PROMPT
+    if term_hints:
+        system += term_hints
+    if backgrounder:
+        # Omezit backgrounder na ~3000 znaku aby nezabiral prilis tokenu
+        bg_text = backgrounder[:3000]
+        if len(backgrounder) > 3000:
+            bg_text += "\n[...zkráceno]"
+        system += (
+            "\n\n## Kontext článku (backgrounder pro překladatele)\n"
+            "Následující poznámky vysvětlují kontext, výrazy a fakta z článku. "
+            "Použij je pro přesnější překlad:\n\n"
+            f"{bg_text}"
+        )
 
     logger.info("Claude API: preklady %d textu (model=%s, term_hints=%s)",
                 len(elements), model, "yes" if term_hints else "no")

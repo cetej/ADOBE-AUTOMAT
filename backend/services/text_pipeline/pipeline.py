@@ -256,10 +256,27 @@ class TextPipeline:
         # Findings ledger context
         ledger = load_findings_ledger(project_dir)
         findings_ctx = format_findings_for_phase(ledger, phase)
-        if findings_ctx:
-            text_with_ctx = findings_ctx + current_text
-        else:
-            text_with_ctx = current_text
+
+        # Backgrounder context (fáze 3-5: termíny, fakta, jazyk)
+        backgrounder_ctx = ""
+        if phase in (3, 4, 5) and getattr(project, "backgrounder", None):
+            bg = project.backgrounder
+            # Truncate — max 4000 znaků, aby nepřetížil prompt
+            if len(bg) > 4000:
+                bg = bg[:4000] + "\n[...zkráceno]"
+            backgrounder_ctx = (
+                "\n---\n"
+                "## BACKGROUNDER (kontext článku pro ověření)\n"
+                "Poznámky editora k článku — obsahují vysvětlení, kontext, "
+                "faktické informace a terminologii. Použij pro ověření faktů, "
+                "termínů a kontextu překladu.\n\n"
+                f"{bg}\n"
+                "---\n\n"
+            )
+
+        # Sestavení kontextu
+        ctx = backgrounder_ctx + (findings_ctx or "")
+        text_with_ctx = ctx + current_text if ctx else current_text
 
         if phase == 2:
             checker = CompletenessChecker(api_key=api_key)

@@ -13,6 +13,7 @@ import shutil
 import zipfile
 import logging
 import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -94,9 +95,71 @@ def cleanup_temp(temp_dir: str | Path) -> None:
         logger.info("Cleaned up temp dir: %s", temp_dir)
 
 
-def list_stories(unpacked_dir: str | Path) -> list[Path]:
-    """Vrati seznam Story XML souboru v rozbalenem IDML."""
-    stories_dir = Path(unpacked_dir) / "Stories"
+def get_master_story_ids(unpacked_dir: str | Path) -> set[str]:
+    """Vrati mnozinu story ID referencovanych POUZE z MasterSpreads.
+
+    Master pages obsahuji template/placeholder texty (pseudo-latina),
+    ktere nejsou soucasti redakcniho obsahu.
+    """
+    unpacked_dir = Path(unpacked_dir)
+    master_dir = unpacked_dir / "MasterSpreads"
+    spread_dir = unpacked_dir / "Spreads"
+
+    def _collect_parent_stories(directory: Path) -> set[str]:
+        stories = set()
+        if not directory.exists():
+            return stories
+        for xml_file in directory.glob("*.xml"):
+            try:
+                tree = ET.parse(xml_file)
+                for elem in tree.getroot().iter():
+                    ps = elem.get("ParentStory", "")
+                    if ps:
+                        stories.add(ps)
+            except ET.ParseError:
+                logger.warning("Failed to parse %s", xml_file)
+        return stories
+
+    master_stories = _collect_parent_stories(master_dir)
+    spread_stories = _collect_parent_stories(spread_dir)
+
+    # Stories referencovane POUZE z master pages (ne ze spreadu)
+    master_only = master_stories - spread_stories
+    if master_only:
+        logger.info(
+            "Found %d master-page-only stories (will be skipped): %s",
+            len(master_only), sorted(master_only)[:5],
+        )
+    return master_only
+
+
+def list_stories(unpacked_dir: str | Path, skip_master: bool = True) -> list[Path]:
+    """Vrati seznam Story XML souboru v rozbalenem IDML.
+
+    Args:
+        skip_master: Pokud True, preskoci stories patrici pouze master pages
+                     (template/placeholder texty).
+    """
+    unpacked_dir = Path(unpacked_dir)
+    stories_dir = unpacked_dir / "Stories"
     if not stories_dir.exists():
         return []
-    return sorted(stories_dir.glob("Story_*.xml"))
+
+    all_stories = sorted(stories_dir.glob("Story_*.xml"))
+
+    if not skip_master:
+        return all_stories
+
+    master_ids = get_master_story_ids(unpacked_dir)
+    if not master_ids:
+        return all_stories
+
+    filtered = [
+        s for s in all_stories
+        if s.stem.replace("Story_", "") not in master_ids
+    ]
+    logger.info(
+        "Stories: %d total, %d after master page filtering",
+        len(all_stories), len(filtered),
+    )
+    return filtered
