@@ -4,6 +4,46 @@ Poučení z vývoje. Nejnovější záznamy nahoře.
 
 ---
 
+## 2026-03-22 — Layout Planner: AI kompozice (Session 4)
+
+**Moduly:**
+- `image_analyzer.py` — Pillow pro rozměry/EXIF, klasifikace hero/supporting/detail
+- `text_parser.py` — strukturovaný (`# HEADLINE:`) i nestrukturovaný text, auto-detekce pull quotes
+- `layout_planner.py` — rule-based jádro + volitelný AI-assisted mód (Claude API)
+
+**Klíčové metriky pro odhad prostoru NG textu:**
+- ~40 znaků/řádek, ~55 řádků/sloupec → ~2200 znaků/sloupec
+- 2 sloupce/stránka = ~4400 znaků/stránka
+- Formula: `ceil(body_chars / 4400 / 2) + 2` = počet spreadů (opening + body + closing)
+
+**Pattern selection logika:**
+- 3+ fotek → `photo_grid_3x2`
+- 1 velká landscape + málo textu → `photo_dominant`
+- landscape fotka + text → `body_mixed_top_photo`
+- text + fotka → `body_mixed_2col`
+- hodně textu, málo fotek → `body_text_3col`
+
+**Pull quote auto-detekce:** Krátké věty (30-150 znaků) s uvozovkami nebo emotivními slovy. Score-based, top 3.
+
+**Nové modely v `models_layout.py`:** `ImageInfo`, `ImagePriority`, `ImageOrientation`, `ArticleText`, `TextEstimate`
+
+---
+
+## 2026-03-22 — IDML Builder: Programatická tvorba IDML
+
+**Klíčové poznatky z implementace IDML Builder (Session 3):**
+
+- **Skeleton IDML přístup**: Vzít reálný NG IDML, kopírovat Resources/Preferences/Fonts/MasterSpreads/XML beze změn, generovat jen nové Spready a Stories. Eliminuje nutnost reverse-engineerovat 100+ KB Styles.xml a Preferences.xml.
+- **Spread souřadnicový systém**: Spread origin je v centru spreadu. Levá stránka `ItemTransform="1 0 0 1 -495 -360"`, pravá `"1 0 0 1 0 -360"`. Pro konverzi z absolutních souřadnic: `spread_x = abs_x - 495`, `spread_y = abs_y - 360`.
+- **Frame positioning**: "Top-left at origin" pattern — `PathPointArray` definuje obdélník od (0,0) do (w,h), `ItemTransform` translate posune na místo ve spread coords.
+- **Frames jsou children of `<Spread>`, NE `<Page>`**. Page element je jen metadata (marginy, guides).
+- **Threaded text frames**: Sdílejí `ParentStory` UID, propojeny přes `PreviousTextFrame`/`NextTextFrame` atributy. Jedna Story → mnoho TextFrame.
+- **UID generátor**: Formát `u{hex}`, začínat od vysokého čísla (0xA0000+) aby se vyhnul kolizím se skeleton UID.
+- **Single page vs double page**: Cover je single-page spread (`PageCount="1"`), reportáže jsou double-page (`PageCount="2"`). Single page má page origin `ItemTransform="1 0 0 1 -{w/2} -{h/2}"`.
+- **designmap.xml**: Musí mít `<?aid?>` processing instruction, `StoryList` se všemi story UIDs, a `<idPkg:*>` reference na všechny soubory v ZIPu.
+
+---
+
 ## 2026-03-22 — Layout Generator: IDML struktura a NG typografie
 
 **Poznatky z reverse-engineeringu 15 NG IDML souborů (květen 2026):**

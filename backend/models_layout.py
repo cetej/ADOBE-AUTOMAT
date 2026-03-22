@@ -5,6 +5,22 @@ from enum import Enum
 from typing import Optional
 
 
+# === Enums pro Layout Planner (Session 4) ===
+
+class ImagePriority(str, Enum):
+    """Priorita fotky v layoutu."""
+    HERO = "hero"               # Hlavní fotka — opening spread, full-bleed
+    SUPPORTING = "supporting"   # Velké fotky pro body spreads
+    DETAIL = "detail"           # Menší fotky, do gridu nebo menších rámců
+
+
+class ImageOrientation(str, Enum):
+    """Orientace fotky."""
+    LANDSCAPE = "landscape"     # Šířka > výška (poměr > 1.2)
+    PORTRAIT = "portrait"       # Výška > šířka (poměr < 0.8)
+    SQUARE = "square"           # Přibližně čtvercová (0.8–1.2)
+
+
 class FrameType(str, Enum):
     """Typ rámce v IDML spreadu."""
     HERO_IMAGE = "hero_image"       # Full-bleed nebo dominantní fotka
@@ -202,5 +218,45 @@ class PlannedSpread(BaseModel):
     pattern_id: str
     spread_type: SpreadType
     assigned_images: list[str] = []      # Cesty k fotkám
+    assigned_image_infos: list["ImageInfo"] = []  # Detailní info o fotkách
     assigned_text_sections: list[str] = []  # ID textových sekcí
     notes: str = ""
+
+
+# === Modely pro Layout Planner (Session 4) ===
+
+class ImageInfo(BaseModel):
+    """Metadata o jedné nahráné fotce."""
+    path: str
+    filename: str = ""
+    width: int = 0              # px
+    height: int = 0             # px
+    orientation: ImageOrientation = ImageOrientation.LANDSCAPE
+    aspect_ratio: float = 1.0   # width / height
+    priority: ImagePriority = ImagePriority.SUPPORTING
+    megapixels: float = 0.0
+    content_hint: str = ""      # Z Claude Vision (volitelné): "landscape", "portrait", "detail"
+
+
+class ArticleText(BaseModel):
+    """Strukturovaný text článku pro layout planner."""
+    headline: str = ""
+    deck: str = ""
+    byline: str = ""
+    body_paragraphs: list[str] = []
+    captions: list[str] = []
+    pull_quotes: list[str] = []
+    # Souhrnné statistiky
+    total_body_chars: int = 0
+    total_chars: int = 0
+
+
+class TextEstimate(BaseModel):
+    """Odhad prostorových nároků textu v layoutu."""
+    total_body_chars: int = 0
+    chars_per_column: int = 2200    # NG: ~40 znaků/řádek × 55 řádků
+    chars_per_page: int = 4400      # 2 sloupce na stránku
+    estimated_body_pages: float = 0.0
+    estimated_total_spreads: int = 1  # Včetně opening + closing
+    has_pull_quotes: bool = False
+    has_captions: bool = False
