@@ -4,6 +4,22 @@ Poučení z vývoje. Nejnovější záznamy nahoře.
 
 ---
 
+## 2026-03-22 — Layout Generator: IDML struktura a NG typografie
+
+**Poznatky z reverse-engineeringu 15 NG IDML souborů (květen 2026):**
+
+- **Stránka NG**: 495×720 pt (6.875"×10"), 12 sloupců, 24pt gutter
+- **Marginy**: asymetrické — Top=75, Bottom=84, Left=57, Right=48 pt
+- **Fonty**: Marden (headlines), Grosvenor Book (body), Geograph Edit (captions/bylines), Earle (alt headlines), Turnpike (drop caps)
+- **IDML atributy**: `Tracking` a `ColumnCount` mohou být float stringy (`"240.00000000000003"`) → vždy `int(float(x))`
+- **Frame identifikace**: `TextFrame.ParentStory` → Story XML → `ParagraphStyleRange.AppliedParagraphStyle` → klasifikace (headline/body/caption...)
+- **Image frames**: `Rectangle ContentType="GraphicType"`, link v `Link.LinkResourceURI`
+- **Spread patterny**: body_mixed (31%), map_infographic (17%), big_picture (16%), photo_grid (16%), opening (6%), closing (5%)
+- **Opening spread**: typicky full-bleed fotka přes oba stránky (1008×738pt nebo větší) + overlay titulky
+- **Body text**: threaded přes více TextFrames se stejným `ParentStory` ID
+
+---
+
 ## 2026-03-22 — PDF matcher NIKDY nepřepisuje contents
 
 **Problém:** PDF source matcher přímo přepisoval `contents` u single-element stories. Nízký práh similarity (0.3) způsobil chybné párování — titulek mapy dostal obsah z jiné story. 5 elementů přepsáno špatným textem.

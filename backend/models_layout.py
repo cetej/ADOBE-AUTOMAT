@@ -1,0 +1,206 @@
+"""Pydantic modely pro Layout Generator."""
+
+from pydantic import BaseModel, Field
+from enum import Enum
+from typing import Optional
+
+
+class FrameType(str, Enum):
+    """Typ rámce v IDML spreadu."""
+    HERO_IMAGE = "hero_image"       # Full-bleed nebo dominantní fotka
+    BODY_IMAGE = "body_image"       # Menší fotka v body spreadu
+    BODY_TEXT = "body_text"         # Hlavní text článku (threaded)
+    HEADLINE = "headline"           # Titulek reportáže
+    DECK = "deck"                   # Podtitulek / deck
+    BYLINE = "byline"              # Jméno autora / fotografa
+    CAPTION = "caption"             # Popisek fotky
+    PULL_QUOTE = "pull_quote"       # Vytažená citace
+    FOLIO = "folio"                # Číslo stránky / patička
+    CREDIT = "credit"              # Photo credit
+    SIDEBAR = "sidebar"            # Boční panel
+    MAP_ART = "map_art"            # Mapa / infografika
+    MAP_LABEL = "map_label"        # Popisek na mapě
+    LOGO = "logo"                  # Logo (cover)
+    COVER_LINE = "cover_line"      # Titulek na obálce
+    UNKNOWN = "unknown"
+
+
+class SpreadType(str, Enum):
+    """Klasifikace typu spreadu."""
+    OPENING = "opening"             # Opening spread — full-bleed foto + titulky
+    PHOTO_DOMINANT = "photo_dominant"  # Velká fotka + caption
+    PHOTO_GRID = "photo_grid"       # Mřížka fotek
+    BODY_TEXT = "body_text"         # Text-heavy spread se sloupci
+    BODY_MIXED = "body_mixed"       # Text + fotky vyvážené
+    MAP_INFOGRAPHIC = "map_infographic"  # Mapa nebo infografika
+    CLOSING = "closing"             # Závěrečný spread (bio, credits)
+    COVER = "cover"                 # Obálka
+    TOC = "toc"                     # Obsah
+    FRONTMATTER = "frontmatter"     # Frontmatter rubrika
+    BIG_PICTURE = "big_picture"     # Big Picture — full-bleed + minimální text
+
+
+class Bounds(BaseModel):
+    """Absolutní pozice a rozměry rámce v bodech (pt)."""
+    x: float
+    y: float
+    width: float
+    height: float
+
+    @property
+    def area(self) -> float:
+        return self.width * self.height
+
+    @property
+    def aspect_ratio(self) -> float:
+        return self.width / self.height if self.height > 0 else 0
+
+
+class FrameSpec(BaseModel):
+    """Specifikace jednoho rámce ve spreadu."""
+    frame_id: str
+    frame_type: FrameType
+    bounds: Bounds
+    # Pro text frames
+    story_id: Optional[str] = None
+    paragraph_style: Optional[str] = None
+    text_content: Optional[str] = None
+    # Pro image frames
+    linked_file: Optional[str] = None
+    # Relativní pozice vůči stránce (0-1)
+    rel_x: Optional[float] = None
+    rel_y: Optional[float] = None
+    rel_width: Optional[float] = None
+    rel_height: Optional[float] = None
+
+
+class PageSpec(BaseModel):
+    """Specifikace jedné stránky."""
+    page_name: str
+    width: float        # pt
+    height: float       # pt
+    margin_top: float = 0
+    margin_bottom: float = 0
+    margin_left: float = 0
+    margin_right: float = 0
+    column_count: int = 1
+    column_gutter: float = 0
+
+
+class SpreadAnalysis(BaseModel):
+    """Analýza jednoho spreadu z existujícího IDML."""
+    spread_index: int
+    spread_id: str
+    spread_type: SpreadType
+    pages: list[PageSpec]
+    frames: list[FrameSpec]
+    # Statistiky
+    text_frame_count: int = 0
+    image_frame_count: int = 0
+    text_area_ratio: float = 0      # Podíl plochy textu na spreadu
+    image_area_ratio: float = 0     # Podíl plochy obrázků na spreadu
+    has_bleed_image: bool = False    # Fotka přesahuje okraje stránky
+
+
+class StyleInfo(BaseModel):
+    """Informace o typografickém stylu."""
+    style_name: str
+    font_family: Optional[str] = None
+    font_style: Optional[str] = None
+    point_size: Optional[float] = None
+    tracking: Optional[int] = None
+    leading: Optional[float] = None
+    capitalization: Optional[str] = None
+    fill_color: Optional[str] = None
+
+
+class TemplateAnalysis(BaseModel):
+    """Kompletní analýza jednoho IDML souboru."""
+    source_file: str
+    document_type: str = ""         # feature, mf, frontmatter, cover
+    page_width: float               # pt
+    page_height: float              # pt
+    page_count: int
+    spread_count: int
+    spreads: list[SpreadAnalysis]
+    paragraph_styles: list[StyleInfo] = []
+    character_styles: list[StyleInfo] = []
+    # Souhrnné statistiky
+    avg_text_ratio: float = 0
+    avg_image_ratio: float = 0
+    spread_type_distribution: dict[str, int] = {}
+
+
+class SpreadPattern(BaseModel):
+    """Abstraktní vzor spreadu — parametrizovaný, ne fixní pixely."""
+    pattern_id: str
+    pattern_name: str
+    spread_type: SpreadType
+    description: str = ""
+    # Sloty — relativní pozice (0-1) vůči spread ploše
+    slots: list["SlotSpec"]
+    # Constraints
+    min_images: int = 0
+    max_images: int = 10
+    min_text_chars: int = 0
+    preferred_for: list[str] = []   # ["opening", "body", "closing"]
+
+
+class SlotSpec(BaseModel):
+    """Slot v spread patternu — relativní pozice pro text nebo obrázek."""
+    slot_id: str
+    slot_type: FrameType
+    # Relativní pozice vůči spreadu (0-1)
+    rel_x: float
+    rel_y: float
+    rel_width: float
+    rel_height: float
+    # Je povinný?
+    required: bool = True
+    # Pro text sloty
+    default_style: Optional[str] = None
+    # Pro image sloty
+    allow_bleed: bool = False
+
+
+class StyleProfile(BaseModel):
+    """Typografický profil — definuje vizuální styl layoutu."""
+    profile_id: str
+    profile_name: str
+    description: str = ""
+    # Rozměry stránky
+    page_width: float = 495         # pt (NG standard)
+    page_height: float = 720        # pt
+    # Marginy
+    margin_top: float = 75
+    margin_bottom: float = 84
+    margin_left: float = 57
+    margin_right: float = 48
+    # Grid
+    column_count: int = 12
+    column_gutter: float = 24
+    # Styly pro různé elementy
+    headline_styles: list[StyleInfo] = []
+    deck_styles: list[StyleInfo] = []
+    body_styles: list[StyleInfo] = []
+    caption_styles: list[StyleInfo] = []
+    byline_styles: list[StyleInfo] = []
+    folio_styles: list[StyleInfo] = []
+
+
+class LayoutPlan(BaseModel):
+    """Plán layoutu — sekvence spreadů s přiřazeným obsahem."""
+    project_id: str
+    style_profile: str
+    total_pages: int
+    spreads: list["PlannedSpread"]
+
+
+class PlannedSpread(BaseModel):
+    """Jeden naplánovaný spread s přiřazeným obsahem."""
+    spread_index: int
+    pattern_id: str
+    spread_type: SpreadType
+    assigned_images: list[str] = []      # Cesty k fotkám
+    assigned_text_sections: list[str] = []  # ID textových sekcí
+    notes: str = ""
