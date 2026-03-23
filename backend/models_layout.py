@@ -251,6 +251,34 @@ class ArticleText(BaseModel):
     total_chars: int = 0
 
 
+class ArticleItem(BaseModel):
+    """Jeden článek v multi-article layoutu."""
+    article_id: str
+    headline: str = ""
+    deck: str = ""
+    byline: str = ""
+    body_paragraphs: list[str] = []
+    captions: list[str] = []
+    pull_quotes: list[str] = []
+    style_profile_id: str = "ng_feature"
+    total_body_chars: int = 0
+    total_chars: int = 0
+
+
+class MultiArticleText(BaseModel):
+    """Kolekce článků pro multi-article layout."""
+    articles: list[ArticleItem]
+    credits: str = ""
+
+
+class MultiArticlePlan(BaseModel):
+    """Plán layoutu pro více článků — jeden LayoutPlan per article."""
+    project_id: str
+    total_pages: int
+    article_plans: list[LayoutPlan]
+    article_boundaries: list[dict] = []  # [{article_id, start_page, end_page}]
+
+
 class TextEstimate(BaseModel):
     """Odhad prostorových nároků textu v layoutu."""
     total_body_chars: int = 0

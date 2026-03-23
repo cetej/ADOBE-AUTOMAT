@@ -16,7 +16,7 @@ import re
 from math import ceil
 from typing import Optional
 
-from models_layout import ArticleText, StyleProfile, TextEstimate
+from models_layout import ArticleItem, ArticleText, MultiArticleText, StyleProfile, TextEstimate
 
 logger = logging.getLogger(__name__)
 
@@ -328,4 +328,111 @@ def estimate_text_space(
         estimated_total_spreads=max(3, total_spreads),  # Min 3: opening + 1 body + closing
         has_pull_quotes=len(text.pull_quotes) > 0,
         has_captions=len(text.captions) > 0,
+    )
+
+
+# === Multi-article parsování ===
+
+# Delimitery pro oddělení článků v jednom textu
+_ARTICLE_DELIMITER_RE = re.compile(
+    r"^(?:===+|# ARTICLE:\s*(.+))$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def parse_multi_article_text(raw_text: str) -> MultiArticleText:
+    """Parsuje text obsahující více článků oddělených delimitery.
+
+    Podporované formáty:
+    - `=== ` nebo `===` jako oddělovač (prázdný název → auto-generovaný)
+    - `# ARTICLE: Název článku` jako oddělovač s názvem
+    - Každý blok se parsuje jako samostatný článek (parse_article_text)
+
+    Pokud text neobsahuje delimitery, celý se zpracuje jako jeden článek.
+    """
+    if not raw_text or not raw_text.strip():
+        return MultiArticleText(articles=[])
+
+    raw_text = raw_text.strip()
+
+    # Rozdělit na bloky podle delimiterů
+    parts = _ARTICLE_DELIMITER_RE.split(raw_text)
+
+    # parts: [text_before, match_group1_or_None, text_after, ...]
+    # Pokud není žádný delimiter, parts = [celý_text]
+    if len(parts) <= 1:
+        article = parse_article_text(raw_text)
+        item = _article_text_to_item(article, "article_1")
+        return MultiArticleText(articles=[item])
+
+    articles: list[ArticleItem] = []
+    idx = 0
+    article_num = 0
+
+    # První část před prvním delimiterem
+    if parts[0].strip():
+        article_num += 1
+        article = parse_article_text(parts[0])
+        articles.append(_article_text_to_item(article, f"article_{article_num}"))
+        idx = 1
+    else:
+        idx = 1
+
+    # Procházet páry (název, text)
+    while idx < len(parts):
+        name = parts[idx]  # capture group z regex (None pro ===)
+        idx += 1
+        text_block = parts[idx] if idx < len(parts) else ""
+        idx += 1
+
+        text_block = text_block.strip()
+        if not text_block:
+            continue
+
+        article_num += 1
+        article = parse_article_text(text_block)
+
+        # Pokud delimiter měl název a článek nemá headline, použij název
+        article_id = f"article_{article_num}"
+        if name and name.strip() and not article.headline:
+            article.headline = name.strip()
+
+        articles.append(_article_text_to_item(article, article_id))
+
+    logger.info("Multi-article: parsováno %d článků", len(articles))
+    return MultiArticleText(articles=articles)
+
+
+def parse_multi_article_files(file_texts: list[tuple[str, str]]) -> MultiArticleText:
+    """Parsuje více souborů — jeden soubor = jeden článek.
+
+    Args:
+        file_texts: Seznam (filename, text_content) tuplů.
+    """
+    articles: list[ArticleItem] = []
+    for i, (filename, text) in enumerate(file_texts, 1):
+        article = parse_article_text(text)
+        article_id = f"article_{i}"
+        # Pokud nemá headline, použij název souboru
+        if not article.headline:
+            stem = Path(filename).stem.replace("_", " ").replace("-", " ")
+            article.headline = stem.title()
+        articles.append(_article_text_to_item(article, article_id))
+
+    logger.info("Multi-article files: parsováno %d článků", len(articles))
+    return MultiArticleText(articles=articles)
+
+
+def _article_text_to_item(article: ArticleText, article_id: str) -> ArticleItem:
+    """Konvertuje ArticleText na ArticleItem."""
+    return ArticleItem(
+        article_id=article_id,
+        headline=article.headline,
+        deck=article.deck,
+        byline=article.byline,
+        body_paragraphs=article.body_paragraphs,
+        captions=article.captions,
+        pull_quotes=article.pull_quotes,
+        total_body_chars=article.total_body_chars,
+        total_chars=article.total_chars,
     )

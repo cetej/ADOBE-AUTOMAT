@@ -1366,3 +1366,377 @@ def api_match_captions_progress(project_id: str):
     if progress["status"] in ("done", "error"):
         result["result"] = progress.get("result")
     return result
+
+
+# === Session 10: Multi-Article endpointy ===
+
+class ImageAllocationRequest(BaseModel):
+    """Přiřazení fotek k článkům."""
+    allocation: dict[str, list[str]]  # {article_id: [filename, ...]}
+
+
+class MultiPlanRequest(BaseModel):
+    num_pages: int | str = "auto"
+    use_ai: bool = False
+
+
+@router.post("/api/layout/multi/upload-articles/{project_id}")
+async def api_multi_upload_articles(
+    project_id: str,
+    text: Optional[str] = Form(None),
+    files: list[UploadFile] = File(default=[]),
+):
+    """Upload N článků — buď jako jeden text s delimitery, nebo N souborů."""
+    meta = _load_project_meta(project_id)
+    d = _project_dir(project_id)
+
+    from services.layout.text_parser import (
+        parse_multi_article_text, parse_multi_article_files,
+    )
+
+    if files and any(f.filename for f in files):
+        file_texts = []
+        articles_dir = d / "articles"
+        articles_dir.mkdir(exist_ok=True)
+        for f in files:
+            if not f.filename:
+                continue
+            content = await f.read()
+            raw = content.decode("utf-8", errors="replace")
+            (articles_dir / f.filename).write_text(raw, encoding="utf-8")
+            file_texts.append((f.filename, raw))
+        multi = parse_multi_article_files(file_texts)
+    elif text:
+        text_path = d / "multi_articles.txt"
+        text_path.write_text(text, encoding="utf-8")
+        multi = parse_multi_article_text(text)
+    else:
+        raise HTTPException(400, "Zadej text nebo nahraj soubory")
+
+    if not multi.articles:
+        raise HTTPException(400, "Žádný článek nebyl rozpoznán")
+
+    meta["multi_article"] = True
+    meta["articles"] = [a.model_dump() for a in multi.articles]
+    meta["image_allocation"] = {}
+    meta["phase"] = "articles_uploaded"
+    _save_project_meta(project_id, meta)
+
+    return {
+        "article_count": len(multi.articles),
+        "articles": [
+            {
+                "article_id": a.article_id,
+                "headline": a.headline[:100] if a.headline else "",
+                "body_paragraphs": len(a.body_paragraphs),
+                "total_chars": a.total_chars,
+                "style_profile_id": a.style_profile_id,
+            }
+            for a in multi.articles
+        ],
+    }
+
+
+@router.post("/api/layout/multi/allocate-images/{project_id}")
+def api_multi_allocate_images(project_id: str, req: ImageAllocationRequest):
+    """Přiřadí fotky k článkům. Nepřiřazené se auto-distribuují."""
+    meta = _load_project_meta(project_id)
+
+    if not meta.get("multi_article"):
+        raise HTTPException(400, "Projekt není multi-article")
+    if not meta.get("images"):
+        raise HTTPException(400, "Nejdřív nahraj fotky")
+
+    all_filenames = {img["filename"] for img in meta["images"]}
+    article_ids = {a["article_id"] for a in meta.get("articles", [])}
+
+    assigned = set()
+    for article_id, filenames in req.allocation.items():
+        if article_id not in article_ids:
+            raise HTTPException(400, f"Neznámý article_id: {article_id}")
+        for fn in filenames:
+            if fn not in all_filenames:
+                raise HTTPException(400, f"Neznámá fotka: {fn}")
+            if fn in assigned:
+                raise HTTPException(400, f"Fotka {fn} je přiřazena vícekrát")
+            assigned.add(fn)
+
+    unassigned = [fn for fn in all_filenames if fn not in assigned]
+    if unassigned:
+        articles_list = list(article_ids)
+        for i, fn in enumerate(sorted(unassigned)):
+            target = articles_list[i % len(articles_list)]
+            if target not in req.allocation:
+                req.allocation[target] = []
+            req.allocation[target].append(fn)
+
+    meta["image_allocation"] = req.allocation
+    meta["phase"] = "images_allocated"
+    _save_project_meta(project_id, meta)
+
+    return {
+        "allocation": req.allocation,
+        "auto_assigned": len(unassigned),
+        "total_images": len(all_filenames),
+    }
+
+
+@router.post("/api/layout/multi/plan/{project_id}")
+def api_multi_plan(project_id: str, req: MultiPlanRequest = MultiPlanRequest()):
+    """Spustí multi-article plánování na pozadí."""
+    meta = _load_project_meta(project_id)
+
+    if not meta.get("multi_article"):
+        raise HTTPException(400, "Projekt není multi-article")
+    if not meta.get("articles"):
+        raise HTTPException(400, "Nejdřív nahraj články")
+    if not meta.get("images"):
+        raise HTTPException(400, "Nejdřív nahraj fotky")
+
+    plan_key = f"{project_id}_multi_plan"
+    if plan_key in _layout_progress and _layout_progress[plan_key].get("status") == "running":
+        raise HTTPException(409, "Plánování již běží")
+
+    api_key = get_api_key() if req.use_ai else None
+
+    _layout_progress[plan_key] = {
+        "status": "running",
+        "stage": "multi_planning",
+        "started_at": time.time(),
+        "message": "Plánuji multi-article layout...",
+        "result": None,
+    }
+
+    def run_multi_plan():
+        progress = _layout_progress[plan_key]
+        try:
+            from models_layout import ArticleItem, ImageInfo, MultiArticleText
+            from services.layout.layout_planner import plan_multi_article_layout
+
+            articles = [ArticleItem(**a) for a in meta["articles"]]
+            multi_text = MultiArticleText(articles=articles)
+
+            all_images = {img["filename"]: ImageInfo(**img) for img in meta["images"]}
+            allocation = meta.get("image_allocation", {})
+
+            image_alloc: dict[str, list] = {}
+            for article_id, filenames in allocation.items():
+                image_alloc[article_id] = [
+                    all_images[fn] for fn in filenames if fn in all_images
+                ]
+
+            if not allocation:
+                all_img_list = list(all_images.values())
+                n = len(articles)
+                for i, article in enumerate(articles):
+                    chunk = len(all_img_list) // n
+                    start = i * chunk
+                    end = start + chunk if i < n - 1 else len(all_img_list)
+                    image_alloc[article.article_id] = all_img_list[start:end]
+
+            progress["message"] = f"Plánuji {len(articles)} článků..."
+
+            multi_plan = plan_multi_article_layout(
+                multi_text=multi_text,
+                image_allocation=image_alloc,
+                project_id=project_id,
+                use_ai=req.use_ai,
+                api_key=api_key,
+            )
+
+            meta["multi_plan"] = multi_plan.model_dump()
+            meta["phase"] = "multi_planned"
+            _save_project_meta(project_id, meta)
+
+            progress["status"] = "done"
+            progress["message"] = f"Plán hotov: {multi_plan.total_pages} stránek, {len(multi_plan.article_plans)} článků"
+            progress["result"] = {
+                "total_pages": multi_plan.total_pages,
+                "article_count": len(multi_plan.article_plans),
+                "boundaries": multi_plan.article_boundaries,
+            }
+
+        except Exception as e:
+            logger.error(f"Multi-plan error: {e}", exc_info=True)
+            progress["status"] = "error"
+            progress["message"] = str(e)
+            progress["result"] = {"error": str(e)}
+
+    thread = threading.Thread(target=run_multi_plan, daemon=True)
+    thread.start()
+
+    return {"status": "started", "message": "Multi-article plánování spuštěno"}
+
+
+@router.get("/api/layout/multi/plan/{project_id}/progress")
+def api_multi_plan_progress(project_id: str):
+    """Polling progress multi-article plánování."""
+    plan_key = f"{project_id}_multi_plan"
+    progress = _layout_progress.get(plan_key)
+    if not progress or progress.get("stage") != "multi_planning":
+        try:
+            meta = _load_project_meta(project_id)
+            if meta.get("multi_plan"):
+                mp = meta["multi_plan"]
+                return {
+                    "status": "done",
+                    "message": f"Plán hotov: {mp['total_pages']} stránek",
+                    "result": {
+                        "total_pages": mp["total_pages"],
+                        "article_count": len(mp["article_plans"]),
+                        "boundaries": mp.get("article_boundaries", []),
+                    },
+                }
+        except Exception:
+            pass
+        return {"status": "idle"}
+
+    resp = {
+        "status": progress["status"],
+        "message": progress.get("message", ""),
+        "elapsed_s": round(time.time() - progress.get("started_at", time.time()), 1),
+    }
+    if progress["status"] in ("done", "error"):
+        resp["result"] = progress.get("result")
+    return resp
+
+
+@router.post("/api/layout/multi/generate/{project_id}")
+def api_multi_generate(project_id: str, req: GenerateRequest = GenerateRequest()):
+    """Vygeneruje jeden IDML z multi-article plánu."""
+    meta = _load_project_meta(project_id)
+
+    if not meta.get("multi_plan"):
+        raise HTTPException(400, "Nejdřív spusť multi-article plánování")
+
+    skeleton = None
+    if req.skeleton_idml:
+        skeleton = Path(req.skeleton_idml)
+        if not skeleton.exists():
+            raise HTTPException(400, f"Skeleton IDML neexistuje: {req.skeleton_idml}")
+    else:
+        skeleton = _find_skeleton_idml()
+        if not skeleton:
+            raise HTTPException(400, "Žádný skeleton IDML k dispozici")
+
+    gen_key = f"{project_id}_multi_gen"
+    if gen_key in _layout_progress and _layout_progress[gen_key].get("status") == "running":
+        raise HTTPException(409, "Generování již běží")
+
+    _layout_progress[gen_key] = {
+        "status": "running",
+        "stage": "multi_generating",
+        "started_at": time.time(),
+        "message": "Generuji multi-article IDML...",
+        "result": None,
+    }
+
+    skeleton_str = str(skeleton)
+
+    def run_multi_generate():
+        progress = _layout_progress[gen_key]
+        try:
+            from models_layout import MultiArticlePlan
+            from services.layout.idml_builder import build_from_multi_article_plans
+
+            multi_plan = MultiArticlePlan(**meta["multi_plan"])
+            articles_data = meta.get("articles", [])
+
+            progress["message"] = "Sestavuji text sekce per article..."
+
+            article_text_sections: dict[str, dict[str, str]] = {}
+            for plan_data, article_data in zip(multi_plan.article_plans, articles_data):
+                sections: dict[str, str] = {}
+                if article_data.get("headline"):
+                    sections["headline"] = article_data["headline"]
+                if article_data.get("deck"):
+                    sections["deck"] = article_data["deck"]
+                if article_data.get("byline"):
+                    sections["byline"] = article_data["byline"]
+                for i, para in enumerate(article_data.get("body_paragraphs", [])):
+                    sections[f"body_{i}"] = para
+                for i, cap in enumerate(article_data.get("captions", [])):
+                    sections[f"caption_{i}"] = cap
+                for i, pq in enumerate(article_data.get("pull_quotes", [])):
+                    sections[f"pullquote_{i}"] = pq
+                article_text_sections[plan_data.project_id] = sections
+
+            article_image_paths: dict[str, dict[str, list[str]]] = {}
+            images_dir = _project_dir(project_id) / "images"
+
+            for plan_data in multi_plan.article_plans:
+                img_map: dict[str, list[str]] = {}
+                for spread in plan_data.spreads:
+                    if spread.assigned_images:
+                        spread_imgs = []
+                        for img_fn in spread.assigned_images:
+                            img_path = images_dir / img_fn
+                            if img_path.exists():
+                                spread_imgs.append(str(img_path))
+                            else:
+                                for info in spread.assigned_image_infos or []:
+                                    p = Path(info.get("path", "")) if isinstance(info, dict) else Path(info.path)
+                                    if p.exists():
+                                        spread_imgs.append(str(p))
+                                        break
+                        if spread_imgs:
+                            img_map[str(spread.spread_index)] = spread_imgs
+                article_image_paths[plan_data.project_id] = img_map
+
+            total_spreads = sum(len(p.spreads) for p in multi_plan.article_plans)
+            progress["message"] = f"Generuji IDML ({total_spreads} spreadů, {len(multi_plan.article_plans)} článků)..."
+
+            output_path = _project_dir(project_id) / f"{project_id}_multi.idml"
+            result_path = build_from_multi_article_plans(
+                multi_plan=multi_plan,
+                skeleton_idml=skeleton_str,
+                output_path=str(output_path),
+                article_text_sections=article_text_sections,
+                article_image_paths=article_image_paths,
+            )
+
+            export_path = EXPORTS_DIR / f"{project_id}_multi.idml"
+            shutil.copy2(result_path, export_path)
+
+            meta["generated_idml"] = str(result_path)
+            meta["phase"] = "multi_generated"
+            _save_project_meta(project_id, meta)
+
+            progress["status"] = "done"
+            progress["message"] = f"Multi-article IDML vygenerován: {result_path.name}"
+            progress["result"] = {
+                "idml_path": str(result_path),
+                "export_path": str(export_path),
+                "size_kb": round(result_path.stat().st_size / 1024, 1),
+                "total_pages": multi_plan.total_pages,
+                "article_count": len(multi_plan.article_plans),
+            }
+
+        except Exception as e:
+            logger.error(f"Multi-IDML generation error: {e}", exc_info=True)
+            progress["status"] = "error"
+            progress["message"] = str(e)
+            progress["result"] = {"error": str(e)}
+
+    thread = threading.Thread(target=run_multi_generate, daemon=True)
+    thread.start()
+
+    return {"status": "started", "message": "Multi-article IDML generování spuštěno"}
+
+
+@router.get("/api/layout/multi/generate/{project_id}/progress")
+def api_multi_generate_progress(project_id: str):
+    """Polling progress multi-article IDML generování."""
+    gen_key = f"{project_id}_multi_gen"
+    progress = _layout_progress.get(gen_key)
+    if not progress or progress.get("stage") != "multi_generating":
+        return {"status": "idle"}
+
+    resp = {
+        "status": progress["status"],
+        "message": progress.get("message", ""),
+        "elapsed_s": round(time.time() - progress.get("started_at", time.time()), 1),
+    }
+    if progress["status"] in ("done", "error"):
+        resp["result"] = progress.get("result")
+    return resp

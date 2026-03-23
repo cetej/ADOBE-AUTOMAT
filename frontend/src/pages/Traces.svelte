@@ -172,16 +172,16 @@
 
     <!-- Cache efficiency -->
     {#if summary.total_cache_read_tokens > 0}
+      {@const ratio = summary.total_cache_read_tokens / (summary.total_input_tokens || 1) * 100}
       <div class="bg-white rounded-lg border p-4 mb-8">
         <h2 class="text-sm font-semibold text-gray-700 mb-2">Cache efektivita</h2>
         <div class="flex items-center gap-4">
           <div class="flex-1 bg-gray-100 rounded-full h-3 overflow-hidden">
-            {@const ratio = summary.total_cache_read_tokens / (summary.total_input_tokens || 1) * 100}
             <div class="bg-emerald-500 h-full rounded-full" style="width: {Math.min(ratio, 100)}%"></div>
           </div>
           <span class="text-sm text-gray-600">
             {fmtTokens(summary.total_cache_read_tokens)} cache hit
-            ({(summary.total_cache_read_tokens / (summary.total_input_tokens || 1) * 100).toFixed(0)}%)
+            ({ratio.toFixed(0)}%)
           </span>
         </div>
       </div>

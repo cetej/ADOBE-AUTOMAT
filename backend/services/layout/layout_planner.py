@@ -19,8 +19,9 @@ from pathlib import Path
 from typing import Optional
 
 from models_layout import (
-    ArticleText, FrameType, ImageInfo, ImageOrientation, ImagePriority,
-    LayoutPlan, PlannedSpread, SpreadType, TextEstimate,
+    ArticleItem, ArticleText, FrameType, ImageInfo, ImageOrientation,
+    ImagePriority, LayoutPlan, MultiArticlePlan, MultiArticleText,
+    PlannedSpread, SpreadType, TextEstimate,
 )
 from services.layout.image_analyzer import analyze_batch, classify_images
 from services.layout.spread_patterns import (
@@ -637,3 +638,89 @@ def plan_layout_variants(
 
     logger.info("Vygenerovány %d varianty layoutu", len(variants))
     return variants
+
+
+# === Multi-article plánování ===
+
+def plan_multi_article_layout(
+    multi_text: MultiArticleText,
+    image_allocation: dict[str, list[ImageInfo]],
+    project_id: Optional[str] = None,
+    use_ai: bool = False,
+    api_key: Optional[str] = None,
+) -> MultiArticlePlan:
+    """Naplánuje layout pro více článků — jeden LayoutPlan per article.
+
+    Args:
+        multi_text: Kolekce článků (z parse_multi_article_text).
+        image_allocation: {article_id: [ImageInfo]} — přiřazení fotek k článkům.
+        project_id: ID projektu.
+        use_ai: Použít AI pro jednotlivé plány.
+        api_key: Anthropic API klíč.
+
+    Returns:
+        MultiArticlePlan s jedním LayoutPlan per article a boundary info.
+    """
+    project_id = project_id or str(uuid.uuid4())[:8]
+    article_plans: list[LayoutPlan] = []
+    boundaries: list[dict] = []
+    cumulative_pages = 0
+
+    for article in multi_text.articles:
+        # Konvertovat ArticleItem na ArticleText
+        article_text = ArticleText(
+            headline=article.headline,
+            deck=article.deck,
+            byline=article.byline,
+            body_paragraphs=article.body_paragraphs,
+            captions=article.captions,
+            pull_quotes=article.pull_quotes,
+            total_body_chars=article.total_body_chars,
+            total_chars=article.total_chars,
+        )
+
+        # Fotky pro tento článek
+        images = image_allocation.get(article.article_id, [])
+
+        # Naplánovat layout pro článek
+        plan = plan_layout(
+            images=images,
+            text=article_text,
+            style_profile_id=article.style_profile_id,
+            project_id=f"{project_id}_{article.article_id}",
+            use_ai=use_ai,
+            api_key=api_key,
+        )
+
+        # Přečíslovat spread_index s offsetem
+        for spread in plan.spreads:
+            spread.spread_index += cumulative_pages // 2
+
+        article_plans.append(plan)
+
+        start_page = cumulative_pages + 1
+        end_page = cumulative_pages + plan.total_pages
+        boundaries.append({
+            "article_id": article.article_id,
+            "headline": article.headline,
+            "style_profile_id": article.style_profile_id,
+            "start_page": start_page,
+            "end_page": end_page,
+            "spread_count": len(plan.spreads),
+        })
+        cumulative_pages += plan.total_pages
+
+    total_pages = cumulative_pages
+
+    logger.info(
+        "Multi-article plán: %d článků, %d stránek celkem, hranice: %s",
+        len(article_plans), total_pages,
+        [(b["article_id"], b["start_page"], b["end_page"]) for b in boundaries],
+    )
+
+    return MultiArticlePlan(
+        project_id=project_id,
+        total_pages=total_pages,
+        article_plans=article_plans,
+        article_boundaries=boundaries,
+    )

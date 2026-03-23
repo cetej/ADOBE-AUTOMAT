@@ -69,6 +69,19 @@
   let matchingCaptions = $state(false);
   let captionMatches = $state(null);
 
+  // Session 10: Multi-Article
+  let multiArticleMode = $state(false);
+  let articleFiles = $state([]);         // File[] pro multi-article upload
+  let multiArticleText = $state('');     // Text s delimitery
+  let articlesInfo = $state(null);       // Parsovaný výsledek z API
+  let imageAllocation = $state({});      // {article_id: [filename...]}
+  let multiPlanResult = $state(null);
+  let multiPlanMessage = $state('');
+  let multiPlanning = $state(false);
+  let multiGenerating = $state(false);
+  let multiGenerateMessage = $state('');
+  let multiGenerateResult = $state(null);
+
   const STEPS = [
     { num: 1, label: 'Styl' },
     { num: 2, label: 'Fotky' },
@@ -234,6 +247,127 @@
       notify('Chyba: ' + e.message, 'error');
     } finally {
       textUploading = false;
+    }
+  }
+
+  // === Multi-Article: Upload článků ===
+  function handleArticleFilesSelect(e) {
+    const files = Array.from(e.target.files || []);
+    articleFiles = [...articleFiles, ...files.filter(f => f.name.endsWith('.txt') || f.name.endsWith('.md'))];
+    e.target.value = '';
+  }
+
+  async function uploadMultiArticles() {
+    if (!createdProjectId) return;
+    textUploading = true;
+    try {
+      let result;
+      if (articleFiles.length > 0) {
+        result = await api.layoutMultiUploadArticles(createdProjectId, { files: articleFiles });
+      } else if (multiArticleText.trim()) {
+        result = await api.layoutMultiUploadArticles(createdProjectId, { text: multiArticleText });
+      } else {
+        return;
+      }
+      articlesInfo = result;
+      // Inicializovat prázdnou alokaci
+      imageAllocation = {};
+      for (const a of result.articles) {
+        imageAllocation[a.article_id] = [];
+      }
+      notify(`${result.article_count} článků nahráno`, 'success');
+      step = 4;
+      runValidation();
+    } catch (e) {
+      notify('Chyba: ' + e.message, 'error');
+    } finally {
+      textUploading = false;
+    }
+  }
+
+  // === Multi-Article: Image Allocation ===
+  function allocateImageToArticle(filename, articleId) {
+    // Odebrat z jiných článků
+    const newAlloc = { ...imageAllocation };
+    for (const key of Object.keys(newAlloc)) {
+      newAlloc[key] = newAlloc[key].filter(fn => fn !== filename);
+    }
+    if (!newAlloc[articleId]) newAlloc[articleId] = [];
+    newAlloc[articleId] = [...newAlloc[articleId], filename];
+    imageAllocation = newAlloc;
+  }
+
+  async function saveImageAllocation() {
+    if (!createdProjectId) return;
+    try {
+      const result = await api.layoutMultiAllocateImages(createdProjectId, imageAllocation);
+      imageAllocation = result.allocation;
+      notify(`Alokace uložena (${result.auto_assigned} auto-přiřazeno)`, 'success');
+    } catch (e) {
+      notify('Chyba: ' + e.message, 'error');
+    }
+  }
+
+  // === Multi-Article: Planning ===
+  async function runMultiPlanning() {
+    if (!createdProjectId) return;
+    multiPlanning = true;
+    multiPlanMessage = 'Spouštím multi-article plánování...';
+    multiPlanResult = null;
+
+    try {
+      await saveImageAllocation();
+      await api.layoutMultiPlan(createdProjectId, { use_ai: useAi });
+
+      let done = false;
+      while (!done) {
+        await new Promise(r => setTimeout(r, 1000));
+        const prog = await api.layoutMultiPlanProgress(createdProjectId);
+        multiPlanMessage = prog.message || '';
+        if (prog.status === 'done') {
+          multiPlanResult = prog.result;
+          done = true;
+          step = 5;
+        } else if (prog.status === 'error') {
+          notify('Chyba plánování: ' + prog.message, 'error');
+          done = true;
+        }
+      }
+    } catch (e) {
+      notify('Chyba: ' + e.message, 'error');
+    } finally {
+      multiPlanning = false;
+    }
+  }
+
+  // === Multi-Article: Generate IDML ===
+  async function runMultiGenerate() {
+    if (!createdProjectId) return;
+    multiGenerating = true;
+    multiGenerateMessage = 'Generuji multi-article IDML...';
+    multiGenerateResult = null;
+
+    try {
+      await api.layoutMultiGenerate(createdProjectId);
+
+      let done = false;
+      while (!done) {
+        await new Promise(r => setTimeout(r, 1500));
+        const prog = await api.layoutMultiGenerateProgress(createdProjectId);
+        multiGenerateMessage = prog.message || '';
+        if (prog.status === 'done') {
+          multiGenerateResult = prog.result;
+          done = true;
+          notify('Multi-article IDML vygenerován!', 'success');
+        } else if (prog.status === 'error') {
+          notify('Chyba generování: ' + prog.message, 'error');
+          done = true;
+        }
+      }
+    } catch (e) {
+      notify('Chyba: ' + e.message, 'error');
+    } finally {
+      multiGenerating = false;
     }
   }
 
@@ -761,57 +895,142 @@
   <!-- STEP 3: Text -->
   {:else if step === 3}
     <div class="bg-white rounded-xl border border-gray-200 p-6">
-      <h2 class="text-lg font-bold text-gray-900 mb-2">Vloz text clanku</h2>
-      <p class="text-xs text-gray-500 mb-4">
-        Strukturovany format: <code># HEADLINE:</code>, <code># DECK:</code>, <code># BYLINE:</code>, <code># BODY:</code>, <code># CAPTION:</code> —
-        nebo prosty text (auto-detekce).
-      </p>
-
-      <div class="mb-3">
-        <label class="inline-block px-3 py-1.5 bg-gray-100 text-gray-700 rounded cursor-pointer hover:bg-gray-200 text-xs font-medium transition-colors">
-          Nahrat .txt soubor
-          <input type="file" accept=".txt,.md,.docx" onchange={handleTextFileSelect} class="hidden" />
+      <!-- Multi-article toggle -->
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-bold text-gray-900">
+          {multiArticleMode ? 'Multi-article layout' : 'Vloz text clanku'}
+        </h2>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" bind:checked={multiArticleMode}
+            class="w-4 h-4 text-indigo-600 rounded" />
+          <span class="text-xs font-medium text-gray-600">Multi-article</span>
         </label>
       </div>
 
-      <textarea
-        class="w-full h-64 p-3 border border-gray-300 rounded-lg text-sm font-mono resize-y focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
-        placeholder="Vloz text clanku zde...
+      {#if !multiArticleMode}
+        <!-- Single article mode (original) -->
+        <p class="text-xs text-gray-500 mb-4">
+          Strukturovany format: <code># HEADLINE:</code>, <code># DECK:</code>, <code># BYLINE:</code>, <code># BODY:</code>, <code># CAPTION:</code> —
+          nebo prosty text (auto-detekce).
+        </p>
+
+        <div class="mb-3">
+          <label class="inline-block px-3 py-1.5 bg-gray-100 text-gray-700 rounded cursor-pointer hover:bg-gray-200 text-xs font-medium transition-colors">
+            Nahrat .txt soubor
+            <input type="file" accept=".txt,.md,.docx" onchange={handleTextFileSelect} class="hidden" />
+          </label>
+        </div>
+
+        <textarea
+          class="w-full h-64 p-3 border border-gray-300 rounded-lg text-sm font-mono resize-y focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
+          placeholder="Vloz text clanku zde...
 
 # HEADLINE: Nazev clanku
 # DECK: Podnazev
 # BYLINE: Autor
 # BODY:
 Text clanku..."
-        bind:value={articleText}
-      ></textarea>
+          bind:value={articleText}
+        ></textarea>
 
-      {#if textInfo}
-        <div class="mt-3 p-3 bg-green-50 rounded-lg text-xs text-green-800">
-          Rozparsovano: {textInfo.headline ? `"${textInfo.headline.slice(0, 60)}..."` : 'bez headline'} &middot;
-          {textInfo.total_chars} znaku &middot;
-          {textInfo.estimated_spreads || '?'} spreadu &middot;
-          {textInfo.pull_quotes || 0} pull quotes
+        {#if textInfo}
+          <div class="mt-3 p-3 bg-green-50 rounded-lg text-xs text-green-800">
+            Rozparsovano: {textInfo.headline ? `"${textInfo.headline.slice(0, 60)}..."` : 'bez headline'} &middot;
+            {textInfo.total_chars} znaku &middot;
+            {textInfo.estimated_spreads || '?'} spreadu &middot;
+            {textInfo.pull_quotes || 0} pull quotes
+          </div>
+        {/if}
+
+        <div class="flex gap-3 mt-4">
+          <button class="px-4 py-2 text-gray-600 hover:text-gray-900 text-sm" onclick={() => { step = 2; }}>
+            &larr; Zpet
+          </button>
+          <button
+            class="flex-1 py-2.5 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={!articleText.trim() || textUploading}
+            onclick={uploadText}
+          >
+            {#if textUploading}
+              <span class="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full mr-2"></span>
+              Nahrazuji...
+            {:else}
+              Pokracovat &rarr;
+            {/if}
+          </button>
+        </div>
+
+      {:else}
+        <!-- Multi-article mode -->
+        <p class="text-xs text-gray-500 mb-4">
+          Nahraj N souborů (1 soubor = 1 článek) nebo vlož text s oddělovači <code>===</code> / <code># ARTICLE: Název</code>.
+        </p>
+
+        <div class="mb-3 flex gap-2">
+          <label class="inline-block px-3 py-1.5 bg-gray-100 text-gray-700 rounded cursor-pointer hover:bg-gray-200 text-xs font-medium transition-colors">
+            Nahrat .txt soubory
+            <input type="file" accept=".txt,.md" multiple onchange={handleArticleFilesSelect} class="hidden" />
+          </label>
+          {#if articleFiles.length > 0}
+            <span class="text-xs text-gray-500 self-center">{articleFiles.length} souborů vybráno</span>
+          {/if}
+        </div>
+
+        {#if articleFiles.length === 0}
+          <textarea
+            class="w-full h-48 p-3 border border-gray-300 rounded-lg text-sm font-mono resize-y focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400"
+            placeholder="# ARTICLE: Prvni clanek
+# HEADLINE: Nazev prvniho clanku
+Text prvniho clanku...
+
+===
+
+# ARTICLE: Druhy clanek
+# HEADLINE: Nazev druheho clanku
+Text druheho clanku..."
+            bind:value={multiArticleText}
+          ></textarea>
+        {:else}
+          <div class="space-y-1 mb-3">
+            {#each articleFiles as f, i}
+              <div class="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded text-xs">
+                <span class="text-gray-700">{f.name}</span>
+                <span class="text-gray-400">{(f.size / 1024).toFixed(1)} KB</span>
+                <button class="ml-auto text-red-400 hover:text-red-600" onclick={() => { articleFiles = articleFiles.filter((_, j) => j !== i); }}>x</button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+        {#if articlesInfo}
+          <div class="mt-3 p-3 bg-green-50 rounded-lg text-xs text-green-800">
+            {articlesInfo.article_count} článků:
+            {#each articlesInfo.articles as a, i}
+              <span class="inline-block mr-2">
+                {i + 1}. {a.headline || a.article_id} ({a.total_chars} zn.)
+              </span>
+            {/each}
+          </div>
+        {/if}
+
+        <div class="flex gap-3 mt-4">
+          <button class="px-4 py-2 text-gray-600 hover:text-gray-900 text-sm" onclick={() => { step = 2; }}>
+            &larr; Zpet
+          </button>
+          <button
+            class="flex-1 py-2.5 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={(articleFiles.length === 0 && !multiArticleText.trim()) || textUploading}
+            onclick={uploadMultiArticles}
+          >
+            {#if textUploading}
+              <span class="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full mr-2"></span>
+              Nahravani...
+            {:else}
+              Pokracovat &rarr;
+            {/if}
+          </button>
         </div>
       {/if}
-
-      <div class="flex gap-3 mt-4">
-        <button class="px-4 py-2 text-gray-600 hover:text-gray-900 text-sm" onclick={() => { step = 2; }}>
-          &larr; Zpet
-        </button>
-        <button
-          class="flex-1 py-2.5 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          disabled={!articleText.trim() || textUploading}
-          onclick={uploadText}
-        >
-          {#if textUploading}
-            <span class="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full mr-2"></span>
-            Nahrazuji...
-          {:else}
-            Pokracovat &rarr;
-          {/if}
-        </button>
-      </div>
     </div>
 
   <!-- STEP 4: Nastaveni -->
@@ -860,11 +1079,51 @@ Text clanku..."
         </label>
       </div>
 
+      <!-- Multi-article: Image Allocation -->
+      {#if multiArticleMode && articlesInfo}
+        <div class="mb-6">
+          <h3 class="text-sm font-semibold text-gray-700 mb-2">Alokace fotek k clankum</h3>
+          <p class="text-xs text-gray-500 mb-3">Prirad fotky k jednotlivym clankum. Neprirazene se automaticky rozdeli.</p>
+          <div class="space-y-3">
+            {#each articlesInfo.articles as article}
+              <div class="p-3 bg-gray-50 rounded-lg">
+                <div class="text-xs font-medium text-gray-700 mb-2">
+                  {article.headline || article.article_id}
+                  <span class="text-gray-400 ml-1">({article.total_chars} zn.)</span>
+                </div>
+                <div class="flex flex-wrap gap-1">
+                  {#each (imageAllocation[article.article_id] || []) as fn}
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs">
+                      {fn}
+                      <button class="text-indigo-400 hover:text-indigo-600" onclick={() => {
+                        imageAllocation[article.article_id] = imageAllocation[article.article_id].filter(f => f !== fn);
+                        imageAllocation = { ...imageAllocation };
+                      }}>x</button>
+                    </span>
+                  {/each}
+                  <select class="text-xs border border-gray-200 rounded px-1 py-0.5"
+                    onchange={(e) => { if (e.target.value) { allocateImageToArticle(e.target.value, article.article_id); e.target.value = ''; } }}>
+                    <option value="">+ pridat fotku</option>
+                    {#each uploadedImages as img}
+                      {#if !Object.values(imageAllocation).flat().includes(img.filename)}
+                        <option value={img.filename}>{img.filename}</option>
+                      {/if}
+                    {/each}
+                  </select>
+                </div>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       <!-- Souhrn -->
       <div class="p-4 bg-gray-50 rounded-lg mb-6 text-xs text-gray-600 space-y-1">
         <div>Styl: <strong>{selectedStyle}</strong></div>
         <div>Fotky: <strong>{uploadedImages.length}</strong></div>
-        {#if textInfo}
+        {#if multiArticleMode && articlesInfo}
+          <div>Clanky: <strong>{articlesInfo.article_count}</strong></div>
+        {:else if textInfo}
           <div>Text: <strong>{textInfo.total_chars} znaku</strong>, odhad <strong>{textInfo.estimated_spreads || '?'} spreadu</strong></div>
         {/if}
         <div>Strany: <strong>{numPages}</strong></div>
@@ -876,12 +1135,12 @@ Text clanku..."
         </button>
         <button
           class="flex-1 py-2.5 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50"
-          disabled={planning}
-          onclick={runPlanning}
+          disabled={planning || multiPlanning}
+          onclick={multiArticleMode ? runMultiPlanning : runPlanning}
         >
-          {#if planning}
+          {#if planning || multiPlanning}
             <span class="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full mr-2"></span>
-            {planMessage}
+            {multiArticleMode ? multiPlanMessage : planMessage}
           {:else}
             Naplanovat layout &rarr;
           {/if}
@@ -892,6 +1151,22 @@ Text clanku..."
   <!-- STEP 5: Plan preview — Session 7 nový design -->
   {:else if step === 5}
     <div class="bg-white rounded-xl border border-gray-200 p-6">
+      <!-- Multi-article boundaries -->
+      {#if multiArticleMode && multiPlanResult?.boundaries}
+        <div class="mb-4 p-3 bg-purple-50 rounded-lg">
+          <h3 class="text-xs font-semibold text-purple-700 mb-2">Multi-article layout — {multiPlanResult.article_count} clanku, {multiPlanResult.total_pages} stran</h3>
+          <div class="space-y-1">
+            {#each multiPlanResult.boundaries as b, i}
+              <div class="flex items-center gap-2 text-xs">
+                <span class="w-5 h-5 rounded-full bg-purple-200 text-purple-700 flex items-center justify-center text-[10px] font-bold">{i + 1}</span>
+                <span class="font-medium text-gray-700">{b.headline || b.article_id}</span>
+                <span class="text-gray-400">str. {b.start_page}–{b.end_page} ({b.spread_count} spreadu)</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       <div class="flex items-center justify-between mb-4">
         <h2 class="text-lg font-bold text-gray-900">Nahled planu</h2>
         {#if planResult || planDetail}
@@ -1184,8 +1459,8 @@ Text clanku..."
         </button>
         <button
           class="flex-1 py-2.5 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50"
-          disabled={!(planResult || planDetail) || generating}
-          onclick={() => { step = 6; runGenerate(); }}
+          disabled={!(planResult || planDetail || multiPlanResult) || generating || multiGenerating}
+          onclick={() => { step = 6; multiArticleMode ? runMultiGenerate() : runGenerate(); }}
         >
           Generovat IDML &rarr;
         </button>
@@ -1196,13 +1471,13 @@ Text clanku..."
   {:else if step === 6}
     <div class="bg-white rounded-xl border border-gray-200 p-6">
       <h2 class="text-lg font-bold text-gray-900 mb-4">
-        {batchMode ? 'Batch generovani IDML' : 'Generovani IDML'}
+        {multiArticleMode ? 'Multi-article IDML' : batchMode ? 'Batch generovani IDML' : 'Generovani IDML'}
       </h2>
 
-      {#if generating || batchGenerating}
+      {#if generating || batchGenerating || multiGenerating}
         <div class="text-center py-10">
           <div class="animate-spin inline-block w-10 h-10 border-3 border-indigo-600 border-t-transparent rounded-full mb-4"></div>
-          <p class="text-indigo-700 font-medium">{generateMessage}</p>
+          <p class="text-indigo-700 font-medium">{multiArticleMode ? multiGenerateMessage : generateMessage}</p>
           {#if batchProgress && batchProgress.total > 0}
             <div class="mt-3 w-64 mx-auto bg-gray-200 rounded-full h-2">
               <div class="bg-purple-600 h-2 rounded-full transition-all"
@@ -1231,6 +1506,20 @@ Text clanku..."
           </div>
         </div>
 
+      {:else if multiGenerateResult}
+        <div class="text-center py-8">
+          <div class="text-4xl mb-3">&#x2705;</div>
+          <p class="text-lg font-bold text-gray-900 mb-2">Multi-article IDML vygenerovan!</p>
+          <p class="text-sm text-gray-500 mb-2">
+            {multiGenerateResult.article_count} clanku &middot; {multiGenerateResult.total_pages} stran &middot; {multiGenerateResult.size_kb || '?'} KB
+          </p>
+          <button
+            class="px-6 py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors text-sm"
+            onclick={downloadIdml}
+          >
+            Stahnout IDML
+          </button>
+        </div>
       {:else if generateResult}
         <div class="text-center py-8">
           <div class="text-4xl mb-3">&#x2705;</div>

@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import Optional
 
 from models_layout import (
-    Bounds, FrameType, LayoutPlan, PlannedSpread, SlotSpec,
-    SpreadPattern, StyleInfo, StyleProfile,
+    Bounds, FrameType, LayoutPlan, MultiArticlePlan, PlannedSpread,
+    SlotSpec, SpreadPattern, StyleInfo, StyleProfile,
 )
 from services.layout.spread_patterns import (
     get_pattern, instantiate_pattern,
@@ -1122,4 +1122,81 @@ def build_from_plan(
                 image_map, page_start=page_num,
             )
 
+    return builder.build(output_path)
+
+
+def build_from_multi_article_plans(
+    multi_plan: MultiArticlePlan,
+    skeleton_idml: str | Path,
+    output_path: str | Path,
+    article_text_sections: dict[str, dict[str, str]] | None = None,
+    article_image_paths: dict[str, dict[str, list[str]]] | None = None,
+) -> Path:
+    """Vytvoří jeden IDML z multi-article plánu.
+
+    Každý článek má vlastní threaded body story (žádné cross-article threading).
+    Stránky jsou číslovány kontinuálně (článek 1: 1-10, článek 2: 11-18...).
+
+    Args:
+        multi_plan: MultiArticlePlan s jedním LayoutPlan per article.
+        skeleton_idml: Cesta ke skeleton IDML.
+        output_path: Kam uložit výstupní IDML.
+        article_text_sections: {article_id: {section_id: text}} — texty per article.
+        article_image_paths: {article_id: {spread_index: [paths]}} — fotky per article.
+
+    Returns:
+        Path k vytvořenému IDML.
+    """
+    article_text_sections = article_text_sections or {}
+    article_image_paths = article_image_paths or {}
+
+    builder = IDMLBuilder(skeleton_idml)
+    global_page_num = 1
+
+    for article_plan in multi_plan.article_plans:
+        profile = get_profile(article_plan.style_profile)
+        if not profile:
+            raise ValueError(f"Style profile not found: {article_plan.style_profile}")
+
+        text_sections = article_text_sections.get(article_plan.project_id, {})
+        image_paths = article_image_paths.get(article_plan.project_id, {})
+
+        for planned_spread in article_plan.spreads:
+            pattern = get_pattern(planned_spread.pattern_id)
+            if not pattern:
+                raise ValueError(f"Pattern not found: {planned_spread.pattern_id}")
+
+            # Sestavit content_map
+            content_map = {}
+            for section_id in planned_spread.assigned_text_sections:
+                if section_id in text_sections:
+                    content_map[section_id] = text_sections[section_id]
+
+            # Sestavit image_map
+            imgs = image_paths.get(str(planned_spread.spread_index), [])
+            image_map = {}
+            img_idx = 0
+            for slot in pattern.slots:
+                if slot.slot_type in (FrameType.HERO_IMAGE, FrameType.BODY_IMAGE):
+                    if img_idx < len(imgs):
+                        image_map[slot.slot_id] = imgs[img_idx]
+                        img_idx += 1
+
+            if planned_spread.spread_type.value == "cover":
+                builder.add_single_page_spread(
+                    pattern, content_map, profile,
+                    image_map, page_start=global_page_num,
+                )
+                global_page_num += 1
+            else:
+                builder.add_spread(
+                    pattern, content_map, profile,
+                    image_map, page_start=global_page_num,
+                )
+                global_page_num += 2
+
+    logger.info(
+        "Multi-article IDML: %d článků, %d stránek, výstup: %s",
+        len(multi_plan.article_plans), global_page_num - 1, output_path,
+    )
     return builder.build(output_path)
