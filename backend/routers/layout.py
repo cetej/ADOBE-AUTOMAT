@@ -1,6 +1,6 @@
 """REST API endpointy pro Layout Generator.
 
-Endpointy:
+Session 1-7 endpointy:
 - POST /api/layout/create-project — nový layout projekt
 - POST /api/layout/upload-images/{project_id} — upload fotek (multipart)
 - POST /api/layout/upload-text/{project_id} — upload textu
@@ -19,6 +19,18 @@ Endpointy:
 - POST /api/layout/update-plan/{project_id} — update layout plánu (reorder, swap)
 - GET  /api/layout/validate/{project_id} — validace projektu
 - GET  /api/layout/plan-detail/{project_id} — detail plánu se sloty a fotkama
+
+Session 8 endpointy:
+- POST /api/layout/create-style-from-template — upload IDML → nový style profile
+- DELETE /api/layout/templates/{profile_id} — smazání custom profilu
+- POST /api/layout/batch-plan/{project_id} — batch varianty plánu
+- POST /api/layout/batch-generate/{project_id} — batch generování IDML
+- GET  /api/layout/batch-generate/{project_id}/progress — polling batch progress
+- GET  /api/layout/batch-download/{project_id}/{variant} — stáhne variantu
+- POST /api/layout/preview-pdf/{project_id} — generování PDF náhledu
+- GET  /api/layout/preview-pdf/{project_id}/download — stáhne PDF
+- POST /api/layout/match-captions/{project_id} — AI caption matching
+- GET  /api/layout/match-captions/{project_id}/progress — polling caption matching
 """
 
 import sys
@@ -856,3 +868,413 @@ def api_plan_detail(project_id: str):
         "total_pages": plan.total_pages,
         "spreads": spreads_detail,
     }
+
+
+# ===========================================================================
+# Session 8: Pokročilé funkce
+# ===========================================================================
+
+
+# --- Feature 1: Style Transfer ---
+
+@router.post("/api/layout/create-style-from-template")
+async def api_create_style_from_template(file: UploadFile = File(...)):
+    """Upload IDML → analýza → nový StyleProfile."""
+    if not file.filename or not file.filename.lower().endswith(".idml"):
+        raise HTTPException(400, "Nahraj IDML soubor")
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".idml", delete=False) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        from services.layout.template_analyzer import analyze_idml
+        from services.layout.style_profiles import profile_from_analysis, register_profile
+
+        analysis = analyze_idml(tmp_path)
+        source_name = Path(file.filename).stem
+        profile = profile_from_analysis(analysis, source_name=source_name)
+        register_profile(profile)
+
+        return {
+            "profile_id": profile.profile_id,
+            "profile_name": profile.profile_name,
+            "description": profile.description,
+            "page_width": profile.page_width,
+            "page_height": profile.page_height,
+            "headline_styles": len(profile.headline_styles),
+            "body_styles": len(profile.body_styles),
+            "caption_styles": len(profile.caption_styles),
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Style transfer selhal: {e}")
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+@router.delete("/api/layout/templates/{profile_id}")
+def api_delete_template(profile_id: str):
+    """Smaže custom style profile."""
+    from services.layout.style_profiles import delete_profile
+    if delete_profile(profile_id):
+        return {"deleted": profile_id}
+    raise HTTPException(400, f"Profil '{profile_id}' nelze smazat (hardcoded nebo neexistuje)")
+
+
+# --- Feature 2: Batch generování ---
+
+class BatchPlanRequest(BaseModel):
+    num_pages: int | str = "auto"
+    style_profile: Optional[str] = None
+    variant_count: int = 3
+
+
+class BatchGenerateRequest(BaseModel):
+    skeleton_idml: Optional[str] = None
+    variant_count: int = 3
+
+
+@router.post("/api/layout/batch-plan/{project_id}")
+def api_batch_plan(project_id: str, req: BatchPlanRequest = BatchPlanRequest()):
+    """Vygeneruje N variant layout plánů."""
+    meta = _load_project_meta(project_id)
+
+    if not meta.get("images"):
+        raise HTTPException(400, "Nejdřív nahraj fotky")
+    if not meta.get("article"):
+        raise HTTPException(400, "Nejdřív nahraj text")
+
+    from models_layout import ImageInfo, ArticleText
+    from services.layout.layout_planner import plan_layout_variants
+
+    images = [ImageInfo(**img) for img in meta["images"]]
+    article = ArticleText(**meta["article"])
+    style_profile = req.style_profile or meta.get("style_profile", "ng_feature")
+
+    variants = plan_layout_variants(
+        images=images,
+        text=article,
+        style_profile_id=style_profile,
+        num_pages=req.num_pages,
+        project_id=project_id,
+        count=min(req.variant_count, 5),
+    )
+
+    # Uložit varianty
+    variants_data = [v.model_dump() for v in variants]
+    d = _project_dir(project_id)
+    (d / "variants").mkdir(exist_ok=True)
+
+    for i, vd in enumerate(variants_data):
+        vpath = d / "variants" / f"plan_v{i + 1}.json"
+        vpath.write_text(json.dumps(vd, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    meta["batch_plans"] = len(variants_data)
+    meta["phase"] = "batch_planned"
+    _save_project_meta(project_id, meta)
+
+    return {
+        "variants": len(variants_data),
+        "plans": [
+            {
+                "variant": i + 1,
+                "total_pages": v.get("total_pages", 0),
+                "spreads": len(v.get("spreads", [])),
+            }
+            for i, v in enumerate(variants_data)
+        ],
+    }
+
+
+@router.post("/api/layout/batch-generate/{project_id}")
+def api_batch_generate(project_id: str, req: BatchGenerateRequest = BatchGenerateRequest()):
+    """Vygeneruje IDML pro všechny varianty."""
+    meta = _load_project_meta(project_id)
+    d = _project_dir(project_id)
+    variants_dir = d / "variants"
+
+    # Najít varianty plánů
+    plan_files = sorted(variants_dir.glob("plan_v*.json")) if variants_dir.exists() else []
+    if not plan_files:
+        raise HTTPException(400, "Nejdřív spusť batch plánování")
+
+    skeleton = None
+    if req.skeleton_idml:
+        skeleton = Path(req.skeleton_idml)
+        if not skeleton.exists():
+            raise HTTPException(400, f"Skeleton neexistuje: {req.skeleton_idml}")
+    else:
+        skeleton = _find_skeleton_idml()
+        if not skeleton:
+            raise HTTPException(400, "Žádný skeleton IDML k dispozici")
+
+    batch_key = f"{project_id}_batch_gen"
+    if batch_key in _layout_progress and _layout_progress[batch_key].get("status") == "running":
+        raise HTTPException(409, "Batch generování již běží")
+
+    _layout_progress[batch_key] = {
+        "status": "running",
+        "stage": "batch_generating",
+        "started_at": time.time(),
+        "message": f"Generuji {len(plan_files)} variant...",
+        "completed": 0,
+        "total": len(plan_files),
+        "result": None,
+    }
+
+    skeleton_str = str(skeleton)
+
+    def run_batch():
+        progress = _layout_progress[batch_key]
+        results = []
+        try:
+            from models_layout import LayoutPlan, ArticleText
+            from services.layout.idml_builder import build_from_plan
+
+            article = ArticleText(**meta["article"])
+
+            text_sections = {}
+            if article.headline:
+                text_sections["headline"] = article.headline
+            if article.deck:
+                text_sections["deck"] = article.deck
+            if article.byline:
+                text_sections["byline"] = article.byline
+            for i, para in enumerate(article.body_paragraphs):
+                text_sections[f"body_{i}"] = para
+            for i, cap in enumerate(article.captions):
+                text_sections[f"caption_{i}"] = cap
+            for i, pq in enumerate(article.pull_quotes):
+                text_sections[f"pullquote_{i}"] = pq
+
+            images_dir = d / "images"
+
+            for vi, pf in enumerate(plan_files, 1):
+                progress["message"] = f"Generuji variantu {vi}/{len(plan_files)}..."
+                progress["completed"] = vi - 1
+
+                plan_data = json.loads(pf.read_text(encoding="utf-8"))
+                plan = LayoutPlan(**plan_data)
+
+                image_paths = {}
+                for spread in plan.spreads:
+                    if spread.assigned_images:
+                        spread_imgs = []
+                        for img_fn in spread.assigned_images:
+                            img_path = images_dir / img_fn
+                            if img_path.exists():
+                                spread_imgs.append(str(img_path))
+                        if spread_imgs:
+                            image_paths[str(spread.spread_index)] = spread_imgs
+
+                output_path = variants_dir / f"variant_{vi}.idml"
+                result_path = build_from_plan(
+                    layout_plan=plan,
+                    skeleton_idml=skeleton_str,
+                    output_path=str(output_path),
+                    text_sections=text_sections,
+                    image_paths=image_paths,
+                )
+
+                results.append({
+                    "variant": vi,
+                    "path": str(result_path),
+                    "size_kb": round(result_path.stat().st_size / 1024, 1),
+                })
+
+            progress["status"] = "done"
+            progress["completed"] = len(plan_files)
+            progress["message"] = f"Vygenerováno {len(results)} variant"
+            progress["result"] = {"variants": results}
+
+        except Exception as e:
+            logger.error("Batch generation error: %s", e, exc_info=True)
+            progress["status"] = "error"
+            progress["message"] = str(e)
+            progress["result"] = {"error": str(e), "completed_variants": results}
+
+    thread = threading.Thread(target=run_batch, daemon=True)
+    thread.start()
+    return {"status": "started", "message": f"Batch generování spuštěno ({len(plan_files)} variant)"}
+
+
+@router.get("/api/layout/batch-generate/{project_id}/progress")
+def api_batch_generate_progress(project_id: str):
+    """Polling progress batch generování."""
+    batch_key = f"{project_id}_batch_gen"
+    progress = _layout_progress.get(batch_key)
+    if not progress or progress.get("stage") != "batch_generating":
+        return {"status": "idle"}
+
+    result = {
+        "status": progress["status"],
+        "message": progress.get("message", ""),
+        "completed": progress.get("completed", 0),
+        "total": progress.get("total", 0),
+        "elapsed_s": round(time.time() - progress.get("started_at", time.time()), 1),
+    }
+    if progress["status"] in ("done", "error"):
+        result["result"] = progress.get("result")
+    return result
+
+
+@router.get("/api/layout/batch-download/{project_id}/{variant}")
+def api_batch_download(project_id: str, variant: int):
+    """Stáhne konkrétní variantu IDML."""
+    d = _project_dir(project_id)
+    idml_path = d / "variants" / f"variant_{variant}.idml"
+    if not idml_path.exists():
+        raise HTTPException(404, f"Varianta {variant} neexistuje")
+    return FileResponse(
+        str(idml_path),
+        media_type="application/octet-stream",
+        filename=f"{project_id}_v{variant}.idml",
+    )
+
+
+# --- Feature 3: PDF Preview ---
+
+@router.post("/api/layout/preview-pdf/{project_id}")
+def api_generate_preview_pdf(project_id: str):
+    """Vygeneruje PDF náhled layoutu."""
+    meta = _load_project_meta(project_id)
+    if not meta.get("plan"):
+        raise HTTPException(400, "Nejdřív spusť plánování")
+
+    try:
+        from services.layout.pdf_preview import generate_preview_pdf
+
+        # Načíst plan detail
+        plan_detail_data = api_plan_detail(project_id)
+        d = _project_dir(project_id)
+
+        pdf_path = generate_preview_pdf(
+            plan_detail=plan_detail_data,
+            project_dir=str(d),
+            style_profile_id=meta.get("style_profile", "ng_feature"),
+        )
+
+        return {
+            "status": "done",
+            "pdf_path": str(pdf_path),
+            "size_kb": round(pdf_path.stat().st_size / 1024, 1),
+        }
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+    except Exception as e:
+        logger.error("PDF preview error: %s", e, exc_info=True)
+        raise HTTPException(500, f"PDF generování selhalo: {e}")
+
+
+@router.get("/api/layout/preview-pdf/{project_id}/download")
+def api_download_preview_pdf(project_id: str):
+    """Stáhne PDF náhled."""
+    d = _project_dir(project_id)
+    pdf_path = d / "preview.pdf"
+    if not pdf_path.exists():
+        raise HTTPException(404, "PDF preview ještě nebyl vygenerován")
+    return FileResponse(
+        str(pdf_path),
+        media_type="application/pdf",
+        filename=f"{project_id}_preview.pdf",
+    )
+
+
+# --- Feature 4: Caption Matching ---
+
+@router.post("/api/layout/match-captions/{project_id}")
+def api_match_captions(project_id: str):
+    """AI přiřazení popisků k fotkám."""
+    meta = _load_project_meta(project_id)
+    if not meta.get("images"):
+        raise HTTPException(400, "Nejdřív nahraj fotky")
+    if not meta.get("article"):
+        raise HTTPException(400, "Nejdřív nahraj text")
+
+    captions = meta["article"].get("captions", [])
+    if not captions:
+        raise HTTPException(400, "Článek neobsahuje žádné popisky (captions)")
+
+    # Spustit na pozadí
+    match_key = f"{project_id}_caption_match"
+    if match_key in _layout_progress and _layout_progress[match_key].get("status") == "running":
+        raise HTTPException(409, "Caption matching již běží")
+
+    _layout_progress[match_key] = {
+        "status": "running",
+        "stage": "caption_matching",
+        "started_at": time.time(),
+        "message": "Přiřazuji popisky k fotkám...",
+        "result": None,
+    }
+
+    def run_matching():
+        progress = _layout_progress[match_key]
+        try:
+            from services.layout.caption_matcher import match_captions_to_images
+
+            images_dir = _project_dir(project_id) / "images"
+            image_paths = sorted(
+                [p for p in images_dir.glob("*")
+                 if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp", ".gif")],
+                key=lambda p: p.stat().st_size,
+                reverse=True,
+            )
+
+            api_key = get_api_key()
+            progress["message"] = f"Analyzuji {len(image_paths)} fotek vs {len(captions)} popisků..."
+
+            matches = match_captions_to_images(
+                image_paths=image_paths,
+                captions=captions,
+                api_key=api_key,
+            )
+
+            # Uložit do meta
+            meta["caption_matches"] = matches
+            _save_project_meta(project_id, meta)
+
+            progress["status"] = "done"
+            progress["message"] = f"Přiřazeno {sum(1 for m in matches if m['caption'])} popisků"
+            progress["result"] = {"matches": matches}
+
+        except Exception as e:
+            logger.error("Caption matching error: %s", e, exc_info=True)
+            progress["status"] = "error"
+            progress["message"] = str(e)
+            progress["result"] = {"error": str(e)}
+
+    thread = threading.Thread(target=run_matching, daemon=True)
+    thread.start()
+    return {"status": "started", "message": "Caption matching spuštěn"}
+
+
+@router.get("/api/layout/match-captions/{project_id}/progress")
+def api_match_captions_progress(project_id: str):
+    """Polling progress caption matchingu."""
+    match_key = f"{project_id}_caption_match"
+    progress = _layout_progress.get(match_key)
+    if not progress or progress.get("stage") != "caption_matching":
+        # Zkusit načíst uložené výsledky
+        try:
+            meta = _load_project_meta(project_id)
+            if meta.get("caption_matches"):
+                return {
+                    "status": "done",
+                    "message": "Popisky přiřazeny",
+                    "result": {"matches": meta["caption_matches"]},
+                }
+        except Exception:
+            pass
+        return {"status": "idle"}
+
+    result = {
+        "status": progress["status"],
+        "message": progress.get("message", ""),
+        "elapsed_s": round(time.time() - progress.get("started_at", time.time()), 1),
+    }
+    if progress["status"] in ("done", "error"):
+        result["result"] = progress.get("result")
+    return result

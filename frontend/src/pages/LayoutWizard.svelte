@@ -31,6 +31,7 @@
   // Step 4: Nastaveni
   let numPages = $state('auto');
   let useAi = $state(false);
+  let batchMode = $state(false);  // Session 8: Batch generování
 
   // Step 5: Plan preview (Session 7 — detailní preview)
   let planResult = $state(null);
@@ -49,6 +50,24 @@
 
   // Validation
   let validation = $state(null);
+
+  // Session 8: Style Transfer
+  let importingStyle = $state(false);
+
+  // Session 8: Batch generování
+  let batchPlans = $state(null);        // {variants: [...]}
+  let batchVariantIdx = $state(0);      // aktuální varianta v náhledu
+  let batchGenerating = $state(false);
+  let batchProgress = $state(null);
+  let batchResults = $state(null);
+
+  // Session 8: PDF Preview
+  let generatingPdf = $state(false);
+  let pdfReady = $state(false);
+
+  // Session 8: Caption Matching
+  let matchingCaptions = $state(false);
+  let captionMatches = $state(null);
 
   const STEPS = [
     { num: 1, label: 'Styl' },
@@ -221,6 +240,12 @@
   // === Step 4: Nastaveni → Step 5: Plan ===
   async function runPlanning() {
     if (!createdProjectId) return;
+
+    // Batch mode
+    if (batchMode) {
+      return runBatchPlanning();
+    }
+
     planning = true;
     planMessage = 'Spoustim planovani...';
     planResult = null;
@@ -325,6 +350,12 @@
   // === Step 6: Generate ===
   async function runGenerate() {
     if (!createdProjectId) return;
+
+    // Batch mode — generuj všechny varianty
+    if (batchMode && batchPlans) {
+      return runBatchGenerate();
+    }
+
     generating = true;
     generateMessage = 'Generuji IDML...';
     generateResult = null;
@@ -355,6 +386,149 @@
   function downloadIdml() {
     if (!createdProjectId) return;
     window.open(api.layoutDownloadUrl(createdProjectId), '_blank');
+  }
+
+  // === Session 8: Style Transfer ===
+  async function importStyleFromIdml(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    importingStyle = true;
+    try {
+      const result = await api.layoutCreateStyleFromTemplate(file);
+      notify(`Styl "${result.profile_name}" importovan`, 'success');
+      // Reload templates
+      const data = await api.layoutTemplates();
+      templates = data.profiles || [];
+      selectedStyle = result.profile_id;
+    } catch (e) {
+      notify('Import stylu selhal: ' + e.message, 'error');
+    } finally {
+      importingStyle = false;
+    }
+  }
+
+  async function deleteCustomStyle(profileId) {
+    try {
+      await api.layoutDeleteTemplate(profileId);
+      notify('Styl smazan', 'success');
+      const data = await api.layoutTemplates();
+      templates = data.profiles || [];
+      if (selectedStyle === profileId) selectedStyle = 'ng_feature';
+    } catch (e) {
+      notify('Chyba: ' + e.message, 'error');
+    }
+  }
+
+  // === Session 8: Batch generování ===
+  async function runBatchPlanning() {
+    if (!createdProjectId) return;
+    planning = true;
+    planMessage = 'Generuji varianty...';
+    batchPlans = null;
+
+    try {
+      const result = await api.layoutBatchPlan(createdProjectId, {
+        num_pages: numPages,
+        style_profile: selectedStyle,
+        variant_count: 3,
+      });
+      batchPlans = result;
+      // Načíst detail prvního plánu (uložen jako hlavní)
+      planResult = result.plans?.[0];
+      step = 5;
+      loadPlanDetail();
+      runValidation();
+      notify(`${result.variants} varianty naplanovany`, 'success');
+    } catch (e) {
+      notify('Chyba batch planovani: ' + e.message, 'error');
+    } finally {
+      planning = false;
+    }
+  }
+
+  async function runBatchGenerate() {
+    batchGenerating = true;
+    batchProgress = { completed: 0, total: 3 };
+    batchResults = null;
+    generateMessage = 'Generuji varianty IDML...';
+
+    try {
+      await api.layoutBatchGenerate(createdProjectId);
+
+      let done = false;
+      while (!done) {
+        await new Promise(r => setTimeout(r, 1500));
+        const prog = await api.layoutBatchGenerateProgress(createdProjectId);
+        batchProgress = prog;
+        generateMessage = prog.message || '';
+        if (prog.status === 'done') {
+          batchResults = prog.result;
+          done = true;
+        } else if (prog.status === 'error') {
+          notify('Chyba: ' + prog.message, 'error');
+          done = true;
+        }
+      }
+    } catch (e) {
+      notify('Chyba: ' + e.message, 'error');
+    } finally {
+      batchGenerating = false;
+    }
+  }
+
+  function downloadBatchVariant(variant) {
+    if (!createdProjectId) return;
+    window.open(api.layoutBatchDownloadUrl(createdProjectId, variant), '_blank');
+  }
+
+  // === Session 8: PDF Preview ===
+  async function generatePdfPreview() {
+    if (!createdProjectId) return;
+    generatingPdf = true;
+    pdfReady = false;
+    try {
+      await api.layoutGeneratePreviewPdf(createdProjectId);
+      pdfReady = true;
+      notify('PDF nahled vygenerovan', 'success');
+    } catch (e) {
+      notify('PDF preview selhal: ' + e.message, 'error');
+    } finally {
+      generatingPdf = false;
+    }
+  }
+
+  function openPdfPreview() {
+    if (!createdProjectId) return;
+    window.open(api.layoutPreviewPdfUrl(createdProjectId), '_blank');
+  }
+
+  // === Session 8: Caption Matching ===
+  async function runCaptionMatching() {
+    if (!createdProjectId) return;
+    matchingCaptions = true;
+    captionMatches = null;
+    try {
+      await api.layoutMatchCaptions(createdProjectId);
+
+      let done = false;
+      while (!done) {
+        await new Promise(r => setTimeout(r, 1500));
+        const prog = await api.layoutMatchCaptionsProgress(createdProjectId);
+        if (prog.status === 'done') {
+          captionMatches = prog.result?.matches || [];
+          done = true;
+          notify(`${captionMatches.length} popisku prirazeno`, 'success');
+        } else if (prog.status === 'error') {
+          notify('Caption matching selhal: ' + prog.message, 'error');
+          done = true;
+        }
+      }
+    } catch (e) {
+      notify('Chyba: ' + e.message, 'error');
+    } finally {
+      matchingCaptions = false;
+    }
   }
 
   // Keyboard shortcuts
@@ -451,14 +625,28 @@
       <div class="space-y-3 mb-6">
         {#if templates.length > 0}
           {#each templates as tpl}
-            <button
-              class="w-full text-left p-4 rounded-lg border-2 transition-colors
-                     {selectedStyle === tpl.id ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'}"
-              onclick={() => { selectedStyle = tpl.id; }}
-            >
-              <div class="font-medium text-gray-900">{tpl.name}</div>
-              <div class="text-xs text-gray-500 mt-1">{tpl.page_width} x {tpl.page_height} pt, {tpl.columns} sloupcu</div>
-            </button>
+            <div class="relative">
+              <button
+                class="w-full text-left p-4 rounded-lg border-2 transition-colors
+                       {selectedStyle === tpl.id ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-gray-300'}"
+                onclick={() => { selectedStyle = tpl.id; }}
+              >
+                <div class="font-medium text-gray-900">
+                  {tpl.name}
+                  {#if tpl.id.startsWith('custom_')}
+                    <span class="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded ml-2">Custom</span>
+                  {/if}
+                </div>
+                <div class="text-xs text-gray-500 mt-1">{tpl.page_width} x {tpl.page_height} pt, {tpl.columns} sloupcu</div>
+              </button>
+              {#if tpl.id.startsWith('custom_')}
+                <button
+                  class="absolute top-2 right-2 w-6 h-6 text-gray-400 hover:text-red-500 text-sm"
+                  onclick={(e) => { e.stopPropagation(); deleteCustomStyle(tpl.id); }}
+                  title="Smazat custom styl"
+                >&times;</button>
+              {/if}
+            </div>
           {/each}
         {:else}
           <button
@@ -478,6 +666,20 @@
             <div class="text-xs text-gray-500 mt-1">495 x 720 pt, 12 sloupcu</div>
           </button>
         {/if}
+      </div>
+
+      <!-- Session 8: Import stylu z IDML -->
+      <div class="border-t border-gray-100 pt-4 mb-6">
+        <label class="inline-flex items-center gap-2 px-4 py-2 bg-gray-50 text-gray-700 rounded-lg cursor-pointer hover:bg-gray-100 text-xs font-medium transition-colors border border-gray-200">
+          {#if importingStyle}
+            <span class="animate-spin inline-block w-3 h-3 border-2 border-gray-500 border-t-transparent rounded-full"></span>
+            Importuji styl...
+          {:else}
+            Importovat styl z IDML
+          {/if}
+          <input type="file" accept=".idml" onchange={importStyleFromIdml} class="hidden" disabled={importingStyle} />
+        </label>
+        <p class="text-[10px] text-gray-400 mt-1">Nahraj libovolny IDML soubor — automaticky se extrahuje typograficky profil</p>
       </div>
 
       <button
@@ -637,12 +839,23 @@ Text clanku..."
       </div>
 
       <!-- AI rezim -->
-      <div class="mb-6">
+      <div class="mb-4">
         <label class="flex items-center gap-3 cursor-pointer">
           <input type="checkbox" bind:checked={useAi} class="w-4 h-4 text-indigo-600 rounded" />
           <div>
             <div class="text-sm font-medium text-gray-700">AI-assisted planovani</div>
             <div class="text-xs text-gray-500">Claude navrhnne optimalni kompozici (vyzaduje API klic)</div>
+          </div>
+        </label>
+      </div>
+
+      <!-- Batch mode (Session 8) -->
+      <div class="mb-6">
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input type="checkbox" bind:checked={batchMode} class="w-4 h-4 text-purple-600 rounded" />
+          <div>
+            <div class="text-sm font-medium text-gray-700">Batch — generovat 3 varianty</div>
+            <div class="text-xs text-gray-500">Ruzne rozlozeni fotek v kazde variante pro porovnani</div>
           </div>
         </label>
       </div>
@@ -692,6 +905,83 @@ Text clanku..."
           </div>
         {/if}
       </div>
+
+      <!-- Session 8: Toolbar — PDF Preview + Caption Matching + Batch tabs -->
+      <div class="flex items-center gap-2 mb-4 flex-wrap">
+        <!-- PDF Preview -->
+        <button
+          class="px-3 py-1.5 text-xs border rounded-lg transition-colors
+                 {generatingPdf ? 'border-gray-300 text-gray-400' : 'border-gray-200 text-gray-600 hover:border-indigo-400 hover:text-indigo-600'}"
+          disabled={generatingPdf || !planDetail}
+          onclick={generatePdfPreview}
+        >
+          {#if generatingPdf}
+            <span class="animate-spin inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full mr-1"></span>
+            Generuji PDF...
+          {:else}
+            PDF nahled
+          {/if}
+        </button>
+        {#if pdfReady}
+          <button
+            class="px-3 py-1.5 text-xs border border-green-300 text-green-700 rounded-lg hover:bg-green-50 transition-colors"
+            onclick={openPdfPreview}
+          >
+            Otevrit PDF
+          </button>
+        {/if}
+
+        <!-- Caption Matching -->
+        {#if textInfo && (textInfo.captions > 0 || projectMeta?.article?.captions?.length > 0)}
+          <button
+            class="px-3 py-1.5 text-xs border rounded-lg transition-colors
+                   {matchingCaptions ? 'border-gray-300 text-gray-400' : 'border-gray-200 text-gray-600 hover:border-cyan-400 hover:text-cyan-600'}"
+            disabled={matchingCaptions}
+            onclick={runCaptionMatching}
+          >
+            {#if matchingCaptions}
+              <span class="animate-spin inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full mr-1"></span>
+              Prirazuji popisky...
+            {:else}
+              Prirazit popisky k fotkam
+            {/if}
+          </button>
+        {/if}
+
+        <!-- Batch variant tabs -->
+        {#if batchMode && batchPlans}
+          <div class="flex-1"></div>
+          <div class="flex gap-1">
+            {#each Array(batchPlans.variants || 3) as _, vi}
+              <button
+                class="px-3 py-1.5 text-xs rounded-lg transition-colors
+                       {batchVariantIdx === vi ? 'bg-purple-100 text-purple-700 border border-purple-300' : 'border border-gray-200 text-gray-500 hover:border-purple-300'}"
+                onclick={() => { batchVariantIdx = vi; }}
+              >
+                V{vi + 1}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <!-- Caption Matches Display -->
+      {#if captionMatches && captionMatches.length > 0}
+        <div class="mb-4 p-3 bg-cyan-50 border border-cyan-200 rounded-lg">
+          <div class="text-xs font-medium text-cyan-800 mb-2">Prirazene popisky ({captionMatches.length})</div>
+          <div class="space-y-1.5 max-h-32 overflow-y-auto">
+            {#each captionMatches as match}
+              {#if match.caption}
+                <div class="flex items-start gap-2 text-[11px]">
+                  <span class="text-cyan-600 font-medium whitespace-nowrap">{match.image}:</span>
+                  <span class="text-gray-700">{match.caption.slice(0, 100)}{match.caption.length > 100 ? '...' : ''}</span>
+                  <span class="text-gray-400 whitespace-nowrap">{match.method === 'ai' ? `(AI ${Math.round(match.confidence * 100)}%)` : '(poradi)'}</span>
+                </div>
+              {/if}
+            {/each}
+          </div>
+        </div>
+      {/if}
 
       {#if planDetail?.spreads}
         <!-- Hlavní layout: spreads grid + detail panel -->
@@ -905,13 +1195,42 @@ Text clanku..."
   <!-- STEP 6: Generovani -->
   {:else if step === 6}
     <div class="bg-white rounded-xl border border-gray-200 p-6">
-      <h2 class="text-lg font-bold text-gray-900 mb-4">Generovani IDML</h2>
+      <h2 class="text-lg font-bold text-gray-900 mb-4">
+        {batchMode ? 'Batch generovani IDML' : 'Generovani IDML'}
+      </h2>
 
-      {#if generating}
+      {#if generating || batchGenerating}
         <div class="text-center py-10">
           <div class="animate-spin inline-block w-10 h-10 border-3 border-indigo-600 border-t-transparent rounded-full mb-4"></div>
           <p class="text-indigo-700 font-medium">{generateMessage}</p>
+          {#if batchProgress && batchProgress.total > 0}
+            <div class="mt-3 w-64 mx-auto bg-gray-200 rounded-full h-2">
+              <div class="bg-purple-600 h-2 rounded-full transition-all"
+                   style="width: {Math.round((batchProgress.completed || 0) / batchProgress.total * 100)}%"></div>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">{batchProgress.completed || 0} / {batchProgress.total} variant</p>
+          {/if}
         </div>
+
+      {:else if batchResults}
+        <!-- Batch výsledky -->
+        <div class="text-center py-6">
+          <div class="text-4xl mb-3">&#x2705;</div>
+          <p class="text-lg font-bold text-gray-900 mb-4">
+            {batchResults.variants?.length || 0} variant vygenerovano!
+          </p>
+          <div class="flex flex-wrap gap-3 justify-center">
+            {#each batchResults.variants || [] as v}
+              <button
+                class="px-4 py-2.5 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
+                onclick={() => downloadBatchVariant(v.variant)}
+              >
+                Varianta {v.variant} ({v.size_kb} KB)
+              </button>
+            {/each}
+          </div>
+        </div>
+
       {:else if generateResult}
         <div class="text-center py-8">
           <div class="text-4xl mb-3">&#x2705;</div>

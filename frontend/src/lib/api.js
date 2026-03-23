@@ -170,4 +170,35 @@ export const api = {
   layoutPlanDetail: (projectId) => request('GET', `/layout/plan-detail/${projectId}`),
   layoutUpdatePlan: (projectId, updates) => request('POST', `/layout/update-plan/${projectId}`, updates),
   layoutValidate: (projectId) => request('GET', `/layout/validate/${projectId}`),
+
+  // Session 8: Pokročilé funkce
+  // Style Transfer
+  layoutCreateStyleFromTemplate: async (file) => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${BASE}/layout/create-style-from-template`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+  },
+  layoutDeleteTemplate: (profileId) => request('DELETE', `/layout/templates/${profileId}`),
+
+  // Batch generování
+  layoutBatchPlan: (projectId, opts = {}) => request('POST', `/layout/batch-plan/${projectId}`, opts),
+  layoutBatchGenerate: (projectId, opts = {}) => request('POST', `/layout/batch-generate/${projectId}`, opts),
+  layoutBatchGenerateProgress: (projectId) => request('GET', `/layout/batch-generate/${projectId}/progress`),
+  layoutBatchDownloadUrl: (projectId, variant) => `${BASE}/layout/batch-download/${projectId}/${variant}`,
+
+  // PDF Preview
+  layoutGeneratePreviewPdf: (projectId) => request('POST', `/layout/preview-pdf/${projectId}`),
+  layoutPreviewPdfUrl: (projectId) => `${BASE}/layout/preview-pdf/${projectId}/download`,
+
+  // Caption Matching
+  layoutMatchCaptions: (projectId) => request('POST', `/layout/match-captions/${projectId}`),
+  layoutMatchCaptionsProgress: (projectId) => request('GET', `/layout/match-captions/${projectId}/progress`),
 };

@@ -564,3 +564,73 @@ def plan_layout_from_files(
         project_id=project_id,
         use_ai=use_ai,
     )
+
+
+def plan_layout_variants(
+    images: list[ImageInfo],
+    text: ArticleText,
+    style_profile_id: str = "ng_feature",
+    num_pages: int | str = "auto",
+    project_id: Optional[str] = None,
+    count: int = 3,
+) -> list[LayoutPlan]:
+    """Vygeneruje N variant layoutu se různým rozložením fotek.
+
+    Varianta 1: Originální pořadí fotek
+    Varianta 2: Shuffled fotky (hero zůstane, zbytek promíchán)
+    Varianta 3: Inverzní pořadí (hero zůstane, zbytek obrácen)
+
+    Returns:
+        Seznam LayoutPlan variant.
+    """
+    import random
+
+    variants = []
+
+    # Varianta 1 — originální pořadí
+    plan1 = plan_layout(
+        images=list(images),
+        text=text,
+        style_profile_id=style_profile_id,
+        num_pages=num_pages,
+        project_id=f"{project_id}_v1" if project_id else None,
+    )
+    variants.append(plan1)
+
+    if count < 2:
+        return variants
+
+    # Separovat hero od zbytku
+    hero = [img for img in images if img.priority == ImagePriority.HERO]
+    non_hero = [img for img in images if img.priority != ImagePriority.HERO]
+
+    # Varianta 2 — shuffled (seed pro reproducibilitu)
+    shuffled = list(non_hero)
+    random.Random(42).shuffle(shuffled)
+    images_v2 = hero + shuffled
+
+    plan2 = plan_layout(
+        images=images_v2,
+        text=text,
+        style_profile_id=style_profile_id,
+        num_pages=num_pages,
+        project_id=f"{project_id}_v2" if project_id else None,
+    )
+    variants.append(plan2)
+
+    if count < 3:
+        return variants
+
+    # Varianta 3 — inverzní pořadí
+    images_v3 = hero + list(reversed(non_hero))
+    plan3 = plan_layout(
+        images=images_v3,
+        text=text,
+        style_profile_id=style_profile_id,
+        num_pages=num_pages,
+        project_id=f"{project_id}_v3" if project_id else None,
+    )
+    variants.append(plan3)
+
+    logger.info("Vygenerovány %d varianty layoutu", len(variants))
+    return variants
