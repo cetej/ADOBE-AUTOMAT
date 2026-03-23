@@ -6,18 +6,24 @@
   import Editor from './pages/Editor.svelte';
   import Outputs from './pages/Outputs.svelte';
   import WriteBack from './pages/WriteBack.svelte';
+  import LayoutWizard from './pages/LayoutWizard.svelte';
   import { currentProject } from './stores/project.js';
-  import { page as pageStore, pendingProjectId, goHome as navGoHome, navigate } from './stores/router.js';
+  import { page as pageStore, pendingProjectId, queryParams, goHome as navGoHome, navigate } from './stores/router.js';
   import { api } from './lib/api.js';
+  import { get } from 'svelte/store';
 
   // Primo subscribe bez $effect — callback nastavi $state
   let currentPage = $state('dashboard');
   let loadingProject = $state(false);
+  let currentQuery = $state({});
+  let currentProjectId = $state(null);
   pageStore.subscribe(v => { currentPage = v; });
+  queryParams.subscribe(v => { currentQuery = v || {}; });
+  pendingProjectId.subscribe(v => { currentProjectId = v; });
 
-  // Po refreshi — načíst projekt z hash
+  // Po refreshi — načíst projekt z hash (jen lokalizacni projekty, ne layout-wizard)
   pendingProjectId.subscribe(id => {
-    if (id && !$currentProject) {
+    if (id && !$currentProject && get(pageStore) !== 'layout-wizard') {
       loadingProject = true;
       api.getProject(id).then(p => {
         if (p && p.id) currentProject.set(p);
@@ -84,6 +90,13 @@
         <div class="inline-block w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
         <p class="text-sm">Nacitam projekt...</p>
       </div>
+    {:else if currentPage === 'layout-wizard'}
+      {#key currentProjectId}
+        <LayoutWizard
+          projectId={currentProjectId}
+          initialStyle={currentQuery.style || 'ng_feature'}
+        />
+      {/key}
     {:else if currentPage === 'dashboard'}
       <Dashboard />
     {:else if currentPage === 'extractor'}

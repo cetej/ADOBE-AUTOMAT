@@ -107,4 +107,60 @@ export const api = {
   // Writeback (MAP → Illustrator)
   writebackMap: (id) => request('POST', `/projects/${id}/writeback-map`),
   writebackMapPreview: (id) => request('POST', `/projects/${id}/writeback-map/preview`),
+
+  // === Layout Generator ===
+  layoutTemplates: () => request('GET', '/layout/templates'),
+  layoutPatterns: () => request('GET', '/layout/patterns'),
+  layoutListProjects: () => request('GET', '/layout/projects'),
+  layoutGetProject: (id) => request('GET', `/layout/projects/${id}`),
+  layoutCreateProject: (data) => request('POST', '/layout/create-project', data),
+  layoutDeleteProject: (id) => request('DELETE', `/layout/projects/${id}`),
+
+  layoutUploadImages: async (projectId, files) => {
+    const form = new FormData();
+    for (const f of files) form.append('files', f);
+    const res = await fetch(`${BASE}/layout/upload-images/${projectId}`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+  },
+
+  layoutUploadText: async (projectId, text) => {
+    const form = new FormData();
+    form.append('text', text);
+    const res = await fetch(`${BASE}/layout/upload-text/${projectId}`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+  },
+
+  layoutUploadTextFile: async (projectId, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${BASE}/layout/upload-text/${projectId}`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+  },
+
+  layoutPlan: (projectId, opts = {}) => request('POST', `/layout/plan/${projectId}`, opts),
+  layoutPlanProgress: (projectId) => request('GET', `/layout/plan/${projectId}/progress`),
+  layoutGenerate: (projectId, opts = {}) => request('POST', `/layout/generate/${projectId}`, opts),
+  layoutGenerateProgress: (projectId) => request('GET', `/layout/generate/${projectId}/progress`),
+  layoutDownloadUrl: (projectId) => `${BASE}/layout/download/${projectId}`,
 };

@@ -4,6 +4,27 @@ Poučení z vývoje. Nejnovější záznamy nahoře.
 
 ---
 
+## 2026-03-22 — Frontend Dashboard + Layout Wizard (Session 6)
+
+**Vytvořeno:**
+- `Dashboard.svelte` redesign: dva sloupce (Lokalizace | Layout Generator) + záložky Lokalizace/Layouty
+- `LayoutWizard.svelte` — 6-step wizard (Styl → Fotky → Text → Nastavení → Plán → Generování)
+- `api.js` — 12 nových layout API metod (CRUD, upload, plan, generate, download)
+- `router.js` — podpora query params (`?style=xxx`) pro hash router
+
+**Klíčové rozhodnutí:**
+- Layout wizard je samostatná stránka (`#layout-wizard` / `#layout-wizard/{projectId}`) — ne pod lokalizačním projektem
+- `pendingProjectId` subscriber v App.svelte musel být podmíněn `currentPage !== 'layout-wizard'` — jinak se snažil načíst layout project ID jako lokalizační projekt (404 → redirect na dashboard)
+- Props z `$props()` inicializované do `$state()` zachytí jen initial value (Svelte 5 warning `state_referenced_locally`) — v tomto případě OK, protože se mění jen jednou při mount
+
+**Architektura wizardu:**
+- Step detection z `projectMeta.phase`: created→1, images_uploaded→3, text_uploaded→4, planned→5, generated→6
+- Polling pattern pro plan/generate (stejný jako translate/pipeline) — `setInterval` s 1s, čeká na `status: done|error`
+- Image preview: `URL.createObjectURL()` pro lokální náhledy před uploadem, hero designation click-to-set
+- Spread miniatura: pozice slotů relativně z layout plánu (`slot.x/990*100%`), barvy podle typu (zelená=image, modrá=text)
+
+---
+
 ## 2026-03-22 — Backend API + Integration Pipeline (Session 5)
 
 **Vytvořeno:**
