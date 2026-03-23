@@ -399,13 +399,16 @@ def _plan_ai(
     project_id: str,
     api_key: Optional[str] = None,
 ) -> Optional[LayoutPlan]:
-    """AI-assisted plánování pomocí Claude API."""
-    import anthropic
+    """AI-assisted plánování pomocí Engine abstrakce."""
+    from core.engine import get_engine, MODEL_SONNET
+    from core.traces import TraceCollector, get_trace_store
 
-    api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        logger.warning("ANTHROPIC_API_KEY nedostupný, přeskakuji AI plánování")
+    engine = get_engine()
+    if not engine.health():
+        logger.warning("Engine nedostupný, přeskakuji AI plánování")
         return None
+
+    collector = TraceCollector(engine, get_trace_store(), module="layout_planner")
 
     # Sestavit popis fotek
     image_lines = []
@@ -430,15 +433,15 @@ def _plan_ai(
     )
 
     try:
-        client = anthropic.Anthropic(api_key=api_key, timeout=60.0)
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=2000,
-            system=_AI_SYSTEM_PROMPT,
+        result = collector.generate(
             messages=[{"role": "user", "content": user_msg}],
+            model=MODEL_SONNET,
+            system=_AI_SYSTEM_PROMPT,
+            max_tokens=2000,
         )
-        raw = response.content[0].text.strip()
-        logger.info("AI layout response: %s", raw[:200])
+        raw = result.content.strip()
+        logger.info("AI layout response (%.1fs, $%.4f): %s",
+                     result.latency_seconds, result.cost_usd, raw[:200])
 
         # Parsovat JSON
         ai_spreads = json.loads(raw)

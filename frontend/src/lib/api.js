@@ -201,4 +201,12 @@ export const api = {
   // Caption Matching
   layoutMatchCaptions: (projectId) => request('POST', `/layout/match-captions/${projectId}`),
   layoutMatchCaptionsProgress: (projectId) => request('GET', `/layout/match-captions/${projectId}/progress`),
+
+  // Pattern Editor (Session 9)
+  layoutPatternsDetail: () => request('GET', '/layout/patterns?detail=true'),
+  layoutGetPattern: (id) => request('GET', `/layout/patterns/${id}`),
+  layoutCreatePattern: (data) => request('POST', '/layout/patterns', data),
+  layoutUpdatePattern: (id, data) => request('PUT', `/layout/patterns/${id}`, data),
+  layoutDeletePattern: (id) => request('DELETE', `/layout/patterns/${id}`),
+  layoutValidatePattern: (data) => request('POST', '/layout/patterns/validate', data),
 };

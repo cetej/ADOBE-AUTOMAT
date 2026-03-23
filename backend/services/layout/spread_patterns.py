@@ -620,17 +620,133 @@ def _build_patterns() -> list[SpreadPattern]:
     return patterns
 
 
+# --- Custom pattern storage ---
+
+import logging
+import re
+
+logger = logging.getLogger(__name__)
+
+CUSTOM_PATTERNS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "templates" / "custom_patterns"
+
+
+def _load_custom_patterns() -> list[SpreadPattern]:
+    """Načte custom patterns z disku."""
+    if not CUSTOM_PATTERNS_DIR.exists():
+        return []
+    patterns = []
+    for f in sorted(CUSTOM_PATTERNS_DIR.glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            patterns.append(SpreadPattern(**data))
+        except Exception as e:
+            logger.warning("Chyba při načítání custom patternu %s: %s", f.name, e)
+    return patterns
+
+
+def _save_custom_pattern(pattern: SpreadPattern) -> Path:
+    """Uloží custom pattern na disk."""
+    CUSTOM_PATTERNS_DIR.mkdir(parents=True, exist_ok=True)
+    path = CUSTOM_PATTERNS_DIR / f"{pattern.pattern_id}.json"
+    path.write_text(
+        json.dumps(pattern.model_dump(), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return path
+
+
+# --- Validace patterns ---
+
+def validate_pattern(pattern: SpreadPattern) -> dict:
+    """Validuje pattern — vrátí dict s errors a warnings.
+
+    Pravidla:
+    - Žádné dva sloty se nesmí překrývat (IoU > 0.05)
+    - Min rozměr slotu: 5% × 5% (0.05 × 0.05)
+    - Alespoň 1 slot
+    - pattern_id musí být kebab-case
+    - Doporučení: alespoň 1 text + 1 image slot (warning)
+    """
+    errors = []
+    warnings = []
+
+    # pattern_id formát
+    if not re.match(r'^[a-z0-9]+(-[a-z0-9]+)*$', pattern.pattern_id):
+        errors.append(f"pattern_id '{pattern.pattern_id}' není kebab-case (povoleno: a-z, 0-9, pomlčky)")
+
+    # Alespoň 1 slot
+    if not pattern.slots:
+        errors.append("Pattern musí mít alespoň 1 slot")
+        return {"valid": False, "errors": errors, "warnings": warnings}
+
+    # Min rozměr
+    for slot in pattern.slots:
+        if slot.rel_width < 0.05 or slot.rel_height < 0.05:
+            errors.append(
+                f"Slot '{slot.slot_id}' je příliš malý "
+                f"({slot.rel_width:.3f}×{slot.rel_height:.3f}, min 0.05×0.05)"
+            )
+        # Hranice 0-1
+        if slot.rel_x < -0.01 or slot.rel_y < -0.01:
+            errors.append(f"Slot '{slot.slot_id}' má zápornou pozici")
+        if slot.rel_x + slot.rel_width > 1.01 or slot.rel_y + slot.rel_height > 1.01:
+            if not slot.allow_bleed:
+                errors.append(f"Slot '{slot.slot_id}' přesahuje hranice spreadu (a nemá allow_bleed)")
+
+    # Overlap — IoU > 0.05
+    slots = pattern.slots
+    for i in range(len(slots)):
+        for j in range(i + 1, len(slots)):
+            a, b = slots[i], slots[j]
+            # Intersection
+            ix1 = max(a.rel_x, b.rel_x)
+            iy1 = max(a.rel_y, b.rel_y)
+            ix2 = min(a.rel_x + a.rel_width, b.rel_x + b.rel_width)
+            iy2 = min(a.rel_y + a.rel_height, b.rel_y + b.rel_height)
+            if ix2 > ix1 and iy2 > iy1:
+                inter = (ix2 - ix1) * (iy2 - iy1)
+                area_a = a.rel_width * a.rel_height
+                area_b = b.rel_width * b.rel_height
+                union = area_a + area_b - inter
+                iou = inter / union if union > 0 else 0
+                if iou > 0.05:
+                    errors.append(
+                        f"Sloty '{a.slot_id}' a '{b.slot_id}' se překrývají (IoU={iou:.2f})"
+                    )
+
+    # Doporučení: alespoň 1 text + 1 image
+    image_types = {FrameType.HERO_IMAGE, FrameType.BODY_IMAGE}
+    text_types = {FrameType.BODY_TEXT, FrameType.HEADLINE, FrameType.DECK}
+    has_image = any(s.slot_type in image_types for s in slots)
+    has_text = any(s.slot_type in text_types for s in slots)
+    if not has_image:
+        warnings.append("Pattern nemá žádný image slot")
+    if not has_text:
+        warnings.append("Pattern nemá žádný textový slot")
+
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
 # --- Pattern Registry ---
 
-_PATTERNS: list[SpreadPattern] | None = None
+_BUILTIN_PATTERNS: list[SpreadPattern] | None = None
+
+
+def _get_builtin_patterns() -> list[SpreadPattern]:
+    """Vrátí hardcoded (builtin) patterns."""
+    global _BUILTIN_PATTERNS
+    if _BUILTIN_PATTERNS is None:
+        _BUILTIN_PATTERNS = _build_patterns()
+    return _BUILTIN_PATTERNS
 
 
 def get_all_patterns() -> list[SpreadPattern]:
-    """Vrátí všechny dostupné spread patterns."""
-    global _PATTERNS
-    if _PATTERNS is None:
-        _PATTERNS = _build_patterns()
-    return _PATTERNS
+    """Vrátí všechny dostupné spread patterns (builtin + custom)."""
+    return _get_builtin_patterns() + _load_custom_patterns()
 
 
 def get_pattern(pattern_id: str) -> SpreadPattern | None:
@@ -649,6 +765,53 @@ def get_patterns_for_type(spread_type: SpreadType) -> list[SpreadPattern]:
 def get_patterns_for_role(role: str) -> list[SpreadPattern]:
     """Vrátí patterns vhodné pro danou roli (opening, body, closing...)."""
     return [p for p in get_all_patterns() if role in p.preferred_for]
+
+
+def is_builtin_pattern(pattern_id: str) -> bool:
+    """Zjistí, zda pattern je builtin (ne custom)."""
+    return any(p.pattern_id == pattern_id for p in _get_builtin_patterns())
+
+
+def register_custom_pattern(pattern: SpreadPattern) -> dict:
+    """Registruje nový custom pattern. Vrátí validační výsledek."""
+    # Nesmí přepsat builtin
+    if is_builtin_pattern(pattern.pattern_id):
+        return {"valid": False, "errors": [f"Nelze přepsat builtin pattern '{pattern.pattern_id}'"], "warnings": []}
+
+    validation = validate_pattern(pattern)
+    if not validation["valid"]:
+        return validation
+
+    _save_custom_pattern(pattern)
+    return validation
+
+
+def update_custom_pattern(pattern: SpreadPattern) -> dict:
+    """Aktualizuje existující custom pattern."""
+    if is_builtin_pattern(pattern.pattern_id):
+        return {"valid": False, "errors": ["Nelze upravit builtin pattern"], "warnings": []}
+
+    path = CUSTOM_PATTERNS_DIR / f"{pattern.pattern_id}.json"
+    if not path.exists():
+        return {"valid": False, "errors": [f"Custom pattern '{pattern.pattern_id}' neexistuje"], "warnings": []}
+
+    validation = validate_pattern(pattern)
+    if not validation["valid"]:
+        return validation
+
+    _save_custom_pattern(pattern)
+    return validation
+
+
+def delete_custom_pattern(pattern_id: str) -> bool:
+    """Smaže custom pattern. Vrátí True pokud existoval."""
+    if is_builtin_pattern(pattern_id):
+        return False
+    path = CUSTOM_PATTERNS_DIR / f"{pattern_id}.json"
+    if path.exists():
+        path.unlink()
+        return True
+    return False
 
 
 def instantiate_pattern(

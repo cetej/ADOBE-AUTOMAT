@@ -4,6 +4,38 @@ Poučení z vývoje. Nejnovější záznamy nahoře.
 
 ---
 
+## 2026-03-23 — OpenJarvis Adopce: Engine + Registry + Traces
+
+**Inspirace:** Stanford OpenJarvis (open-jarvis/OpenJarvis) — local-first AI framework.
+Cherry-picked 3 patterns, zbytek (channels, security, learning/LoRA, DAG workflow) je pro náš use case overkill.
+
+**Vytvořeno (`backend/core/`):**
+- `registry.py` — Generic `RegistryBase[T]` s dekorátorovým `@register("key")`. Izolované _registry per subclass.
+- `engine.py` — `InferenceEngine` ABC + `AnthropicEngine` implementace. `EngineResult` s cost estimation. Singleton `get_engine()`.
+- `traces.py` — `TraceStore` (SQLite), `TraceCollector` (wrapper), `Trace` dataclass. Per-call záznam tokenů, latence, nákladů.
+
+**Refactored:**
+- `layout_planner._plan_ai()` — přímé `anthropic.Anthropic()` → `get_engine()` + `TraceCollector`
+- `translation_service._translate_api_call()` — `client.messages.create()` → `collector.generate()`
+- `ClaudeProcessor.__init__()` — přidán engine + collector, `is_available()` deleguje na `engine.health()`
+- `ClaudeProcessor.process()` — trace záznam po každém streaming volání
+
+**API endpointy:**
+- `GET /api/traces/summary?since=&until=&module=` — agregované statistiky
+- `GET /api/traces/recent?limit=20` — posledních N volání
+
+**Klíčová rozhodnutí:**
+- ClaudeProcessor zachovává přímý streaming přes `client.messages.stream()` — Engine abstrakce je pro non-streaming a trace tracking. Streaming vyžaduje granulární kontrolu nad events (thinking blocks, tool_use, cache stats).
+- `TraceStore` používá persistent SQLite connection pro `:memory:` mode (každý `sqlite3.connect(':memory:')` vytváří novou prázdnou DB).
+- Cost estimation je hardcoded tabulka (Anthropic pricing 2026-03) — stačí pro interní monitoring, přesné billing info je v API dashboard.
+- `get_engine()` je singleton — jeden engine per process. Pro multi-model routing stačí volat `engine.generate(model="haiku")`.
+
+**Architektonické poučení:**
+- OpenJarvis Registry pattern je elegantní ale pro náš scope (3 moduly, 1 engine) je registrace dekorátorem spíš pro budoucí rozšiřitelnost. Dnes stačí `get_engine()`.
+- TraceCollector jako wrapper je čistší než inline tracking — přidá se jednou a pak se nemusí řešit v každém modulu.
+
+---
+
 ## 2026-03-22 — Frontend Dashboard + Layout Wizard (Session 6)
 
 **Vytvořeno:**

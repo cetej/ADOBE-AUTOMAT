@@ -7,6 +7,7 @@
   import Outputs from './pages/Outputs.svelte';
   import WriteBack from './pages/WriteBack.svelte';
   import LayoutWizard from './pages/LayoutWizard.svelte';
+  import PatternEditor from './pages/PatternEditor.svelte';
   import { currentProject } from './stores/project.js';
   import { page as pageStore, pendingProjectId, queryParams, goHome as navGoHome, navigate } from './stores/router.js';
   import { api } from './lib/api.js';
@@ -21,9 +22,9 @@
   queryParams.subscribe(v => { currentQuery = v || {}; });
   pendingProjectId.subscribe(v => { currentProjectId = v; });
 
-  // Po refreshi — načíst projekt z hash (jen lokalizacni projekty, ne layout-wizard)
+  // Po refreshi — načíst projekt z hash (jen lokalizacni projekty, ne layout-wizard/pattern-editor)
   pendingProjectId.subscribe(id => {
-    if (id && !$currentProject && get(pageStore) !== 'layout-wizard') {
+    if (id && !$currentProject && get(pageStore) !== 'layout-wizard' && get(pageStore) !== 'pattern-editor') {
       loadingProject = true;
       api.getProject(id).then(p => {
         if (p && p.id) currentProject.set(p);
@@ -90,6 +91,8 @@
         <div class="inline-block w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
         <p class="text-sm">Nacitam projekt...</p>
       </div>
+    {:else if currentPage === 'pattern-editor'}
+      <PatternEditor />
     {:else if currentPage === 'layout-wizard'}
       {#key currentProjectId}
         <LayoutWizard

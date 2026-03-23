@@ -31,6 +31,14 @@ Session 8 endpointy:
 - GET  /api/layout/preview-pdf/{project_id}/download — stáhne PDF
 - POST /api/layout/match-captions/{project_id} — AI caption matching
 - GET  /api/layout/match-captions/{project_id}/progress — polling caption matching
+
+Session 9 endpointy:
+- GET  /api/layout/patterns?detail=true — seznam patterns (s detaily slotů)
+- GET  /api/layout/patterns/{pattern_id} — detail jednoho patternu
+- POST /api/layout/patterns — vytvoří nový custom pattern
+- PUT  /api/layout/patterns/{pattern_id} — update custom patternu
+- DELETE /api/layout/patterns/{pattern_id} — smazání custom patternu
+- POST /api/layout/patterns/validate — validace patternu bez uložení
 """
 
 import sys
@@ -588,24 +596,104 @@ def api_list_templates():
 
 
 @router.get("/api/layout/patterns")
-def api_list_patterns():
-    """Seznam spread patterns."""
-    from services.layout.spread_patterns import get_all_patterns
+def api_list_patterns(detail: bool = False):
+    """Seznam spread patterns. detail=true vrátí i sloty."""
+    from services.layout.spread_patterns import get_all_patterns, is_builtin_pattern
     patterns = get_all_patterns()
+    result = []
+    for p in patterns:
+        item = {
+            "id": p.pattern_id,
+            "name": p.pattern_name,
+            "type": p.spread_type,
+            "min_images": p.min_images,
+            "max_images": p.max_images,
+            "slots_count": len(p.slots),
+            "description": p.description,
+            "is_builtin": is_builtin_pattern(p.pattern_id),
+        }
+        if detail:
+            item["slots"] = [s.model_dump() for s in p.slots]
+            item["preferred_for"] = p.preferred_for
+            item["min_text_chars"] = p.min_text_chars
+        result.append(item)
+    return {"patterns": result}
+
+
+@router.get("/api/layout/patterns/{pattern_id}")
+def api_get_pattern(pattern_id: str):
+    """Detail jednoho patternu se všemi sloty."""
+    from services.layout.spread_patterns import get_pattern, is_builtin_pattern
+    p = get_pattern(pattern_id)
+    if not p:
+        raise HTTPException(404, f"Pattern neexistuje: {pattern_id}")
     return {
-        "patterns": [
-            {
-                "id": p.pattern_id,
-                "name": p.pattern_name,
-                "type": p.spread_type,
-                "min_images": p.min_images,
-                "max_images": p.max_images,
-                "slots": len(p.slots),
-                "description": p.description,
-            }
-            for p in patterns
-        ]
+        "id": p.pattern_id,
+        "name": p.pattern_name,
+        "type": p.spread_type,
+        "description": p.description,
+        "min_images": p.min_images,
+        "max_images": p.max_images,
+        "min_text_chars": p.min_text_chars,
+        "preferred_for": p.preferred_for,
+        "is_builtin": is_builtin_pattern(p.pattern_id),
+        "slots": [s.model_dump() for s in p.slots],
     }
+
+
+@router.post("/api/layout/patterns")
+def api_create_pattern(pattern: dict):
+    """Vytvoří nový custom pattern."""
+    from services.layout.spread_patterns import register_custom_pattern
+    from models_layout import SpreadPattern
+    try:
+        sp = SpreadPattern(**pattern)
+    except Exception as e:
+        raise HTTPException(400, f"Neplatná data patternu: {e}")
+    result = register_custom_pattern(sp)
+    if not result["valid"]:
+        raise HTTPException(400, {"detail": "Validace selhala", "errors": result["errors"]})
+    return {"ok": True, "pattern_id": sp.pattern_id, **result}
+
+
+@router.put("/api/layout/patterns/{pattern_id}")
+def api_update_pattern(pattern_id: str, pattern: dict):
+    """Aktualizuje existující custom pattern."""
+    from services.layout.spread_patterns import update_custom_pattern
+    from models_layout import SpreadPattern
+    pattern["pattern_id"] = pattern_id
+    try:
+        sp = SpreadPattern(**pattern)
+    except Exception as e:
+        raise HTTPException(400, f"Neplatná data patternu: {e}")
+    result = update_custom_pattern(sp)
+    if not result["valid"]:
+        raise HTTPException(400, {"detail": "Validace selhala", "errors": result["errors"]})
+    return {"ok": True, "pattern_id": pattern_id, **result}
+
+
+@router.delete("/api/layout/patterns/{pattern_id}")
+def api_delete_pattern(pattern_id: str):
+    """Smaže custom pattern (builtin nelze smazat)."""
+    from services.layout.spread_patterns import delete_custom_pattern, is_builtin_pattern
+    if is_builtin_pattern(pattern_id):
+        raise HTTPException(400, "Nelze smazat builtin pattern")
+    deleted = delete_custom_pattern(pattern_id)
+    if not deleted:
+        raise HTTPException(404, f"Custom pattern neexistuje: {pattern_id}")
+    return {"ok": True, "deleted": pattern_id}
+
+
+@router.post("/api/layout/patterns/validate")
+def api_validate_pattern(pattern: dict):
+    """Validace patternu bez uložení."""
+    from services.layout.spread_patterns import validate_pattern
+    from models_layout import SpreadPattern
+    try:
+        sp = SpreadPattern(**pattern)
+    except Exception as e:
+        raise HTTPException(400, f"Neplatná data patternu: {e}")
+    return validate_pattern(sp)
 
 
 # --- Session 7: Preview & Polish ---

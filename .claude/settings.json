@@ -10,6 +10,9 @@
   "enabledPlugins": {
     "stopa-orchestration@stopa-tools": true
   },
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -30,6 +33,19 @@
         ]
       }
     ],
+    "PostCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/post-compact.sh",
+            "timeout": 3,
+            "statusMessage": "Post-compaction checkpoint reminder"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "",
@@ -38,6 +54,45 @@
             "type": "command",
             "command": "bash .claude/hooks/scribe-reminder.sh",
             "timeout": 5
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/task-completed.sh",
+            "timeout": 3,
+            "statusMessage": "Task completed — checking for learnings..."
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/teammate-idle.sh",
+            "timeout": 10,
+            "statusMessage": "Quality gate — checking teammate output..."
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/stop-failure.sh",
+            "timeout": 3,
+            "statusMessage": "API error — checking recovery..."
           }
         ]
       }

@@ -15,8 +15,6 @@ import os
 import re
 from pathlib import Path
 
-import anthropic
-
 from config import TRANSLATION_MEMORY_PATH, MULTI_DOMAIN_DB_PATH
 from models import TextElement
 
@@ -194,12 +192,7 @@ def translate_batch(
     Returns:
         list[dict]: [{"id": "...", "czech": "..."}] — uspesne preklady
     """
-    api_key = get_api_key()
-    if not api_key:
-        raise ValueError(
-            "ANTHROPIC_API_KEY neni nastaven. "
-            "Nastavte env promennou nebo vytvorte .env soubor v rootu projektu."
-        )
+    # API klíč se řeší uvnitř Engine abstrakce (core.engine)
 
     # Aplikovat translation memory
     memory = load_translation_memory()
@@ -224,8 +217,12 @@ def translate_batch(
     if not to_translate:
         return from_memory
 
-    # Rozdelit na batche
-    client = anthropic.Anthropic(api_key=api_key, timeout=120.0)
+    # Engine s trace sledováním
+    from core.engine import get_engine
+    from core.traces import TraceCollector, get_trace_store
+
+    engine = get_engine()
+    collector = TraceCollector(engine, get_trace_store(), module="translation")
     all_results = list(from_memory)
 
     for i in range(0, len(to_translate), max_batch):
@@ -235,7 +232,7 @@ def translate_batch(
         if progress_callback:
             progress_callback(batch_num, total_batches, len(from_memory))
 
-        results = _translate_api_call(client, batch, project_type, model, backgrounder)
+        results = _translate_api_call(collector, batch, project_type, model, backgrounder)
         all_results.extend(results)
 
     return all_results
@@ -306,13 +303,15 @@ def _build_term_hints(elements: list[TextElement]) -> str:
 
 
 def _translate_api_call(
-    client: anthropic.Anthropic,
+    collector,
     elements: list[TextElement],
     project_type: str,
     model: str,
     backgrounder: str | None = None,
 ) -> list[dict]:
-    """Jedno API volani pro batch elementu."""
+    """Jedno API volání pro batch elementů — přes Engine abstrakci."""
+    from core.engine import resolve_model
+
     # Sestavit user prompt
     items = []
     for el in elements:
@@ -352,15 +351,19 @@ def _translate_api_call(
     logger.info("Claude API: preklady %d textu (model=%s, term_hints=%s)",
                 len(elements), model, "yes" if term_hints else "no")
 
-    response = client.messages.create(
-        model=model,
-        max_tokens=8192,
-        system=system,
+    result = collector.generate(
         messages=[{"role": "user", "content": user_msg}],
+        model=resolve_model(model) if len(model) < 20 else model,
+        system=system,
+        max_tokens=8192,
     )
 
+    logger.info("Překlad: %.1fs, $%.4f, %d+%d tokenů",
+                result.latency_seconds, result.cost_usd,
+                result.input_tokens, result.output_tokens)
+
     # Parsovat JSON z odpovedi — extrahuj JSON pole z odpovedi
-    raw = response.content[0].text.strip()
+    raw = result.content.strip()
     logger.info("API response: stop=%s, len=%d, tokens_out=%d",
                 response.stop_reason, len(raw), response.usage.output_tokens)
 

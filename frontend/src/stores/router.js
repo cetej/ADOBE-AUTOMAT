@@ -37,8 +37,8 @@ window.addEventListener('hashchange', () => {
 
 export function navigate(target) {
   const proj = get(currentProject);
-  // layout-wizard — projdi primo (muze mit vlastni projectId/query)
-  if (target.startsWith('layout-wizard')) {
+  // layout-wizard, pattern-editor — projdi primo (muze mit vlastni projectId/query)
+  if (target.startsWith('layout-wizard') || target.startsWith('pattern-editor')) {
     window.location.hash = target;
   } else if (proj && !target.includes('/')) {
     // Zachovat project ID v hashi

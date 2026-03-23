@@ -37,6 +37,49 @@ app.add_middleware(
 async def health():
     return {"status": "ok", "app": "NGM Localizer", "version": "0.1.0"}
 
+
+@app.get("/api/traces/summary")
+async def traces_summary(since: str = None, until: str = None, module: str = None):
+    """Statistiky API volání — tokeny, náklady, latence."""
+    from core.traces import get_trace_store
+    store = get_trace_store()
+    s = store.summary(since=since, until=until, module=module)
+    return {
+        "total_calls": s.total_calls,
+        "total_input_tokens": s.total_input_tokens,
+        "total_output_tokens": s.total_output_tokens,
+        "total_cache_read_tokens": s.total_cache_read_tokens,
+        "total_cost_usd": round(s.total_cost_usd, 4),
+        "total_latency_seconds": round(s.total_latency_seconds, 1),
+        "success_count": s.success_count,
+        "error_count": s.error_count,
+        "by_model": s.by_model,
+        "by_module": s.by_module,
+    }
+
+
+@app.get("/api/traces/recent")
+async def traces_recent(limit: int = 20):
+    """Posledních N API volání."""
+    from core.traces import get_trace_store
+    store = get_trace_store()
+    traces = store.recent(limit=limit)
+    return [
+        {
+            "trace_id": t.trace_id,
+            "timestamp": t.timestamp,
+            "module": t.module,
+            "model": t.model,
+            "input_tokens": t.input_tokens,
+            "output_tokens": t.output_tokens,
+            "cost_usd": round(t.cost_usd, 4),
+            "latency_seconds": round(t.latency_seconds, 1),
+            "success": t.success,
+            "error": t.error,
+        }
+        for t in traces
+    ]
+
 # Routery
 app.include_router(projects.router)
 app.include_router(illustrator.router)

@@ -344,17 +344,289 @@ pro reportáže na základě analýzy existujících NG šablon, nahraných fote
 
 ---
 
-## Session 8: Pokročilé funkce (volitelná)
+## Session 8: Pokročilé funkce ✅ DONE
 **Cíl:** Rozšíření pro power users.
 
-### Možné úkoly
-1. **Style transfer** — upload libovolného IDML → extrakce stylu → nový profil
-2. **Batch generování** — více variant layoutu z jednoho vstupu (A/B testování kompozice)
-3. **Template editor** — uživatel může vytvořit vlastní spread pattern
-4. **PDF preview** — vygenerovat PDF náhled přímo v browseru (bez InDesignu)
-5. **Caption matching** — AI přiřadí popisky k fotkám na základě obsahu
-6. **Multi-article** — layout pro celé číslo (více reportáží + frontmatter)
-7. **Illustrator integration** — export map/infografik do layoutu
+### Implementováno
+1. ✅ **Style transfer** — upload IDML → extrakce stylu → nový custom profil
+2. ✅ **Batch generování** — 3 varianty layoutu (shuffled/inverzní fotky)
+3. ✅ **PDF preview** — ReportLab renderování spreadů s reálnými fotkami
+4. ✅ **Caption matching** — Claude Vision AI přiřazení popisků k fotkám
+
+### Nové moduly
+- `backend/services/layout/pdf_preview.py`
+- `backend/services/layout/caption_matcher.py`
+
+---
+
+## Session 9: Template Editor — Vizuální editor spread patterns
+**Cíl:** Uživatel může vytvářet a editovat vlastní spread patterns přes drag-and-drop UI.
+
+### Kontext
+Aktuálně existuje 9 hardcoded patterns v `spread_patterns.py`. Každý pattern definuje
+sloty (SlotSpec) s relativními koordináty 0–1 v rámci spreadu (990×720pt).
+Template Editor umožní vizuálně kreslit nové patterns a ukládat je jako custom.
+
+### Úkoly
+
+1. **Backend: Custom pattern persistence** (30 min)
+   - `spread_patterns.py`: přidat `register_custom_pattern()`, `delete_custom_pattern()`, `load_custom_patterns()`
+   - Ukládání do `data/templates/custom_patterns/` jako JSON (stejný formát jako `patterns.json`)
+   - Upravit `get_all_patterns()` — vrátí hardcoded + custom
+   - Validace: overlap detection, min velikost slotu (5% × 5%), margin check
+
+2. **Backend: CRUD endpointy pro patterns** (30 min)
+   - `POST /api/layout/patterns` — vytvoří nový custom pattern (JSON body)
+   - `PUT /api/layout/patterns/{pattern_id}` — update existujícího custom patternu
+   - `DELETE /api/layout/patterns/{pattern_id}` — smaže custom pattern
+   - `POST /api/layout/patterns/validate` — validace patternu (overlap, min size, required slots)
+
+3. **Frontend: PatternEditor.svelte** (120 min) — hlavní komponenta
+   - SVG canvas s přesností na spread (990×720pt mapped do px)
+   - **Grid & guides**: marginy (šedě čárkovaně), stránkový střed (svislá čára), volitelný 12-column grid
+   - **Kreslení slotů**: kliknutí + tah → nový obdélník → modal s nastavením (slot_type, required, allow_bleed)
+   - **Drag-and-drop editace**: přetáhnutí slotu, resize za rohy/hrany, snap to grid/margins
+   - **Slot list sidebar**: seznam slotů s typem, pozicí, delete button
+   - **Barvy podle typu**: hero_image=zelená, body_text=modrá, headline=fialová (viz SLOT_COLORS z SpreadPreview)
+   - **Real-time validace**: červeně zvýraznit překrývající se sloty
+
+4. **Frontend: Integrace do wizardu** (30 min)
+   - Nový sub-step v Step 1: vedle výběru stylu → "Vlastní pattern" tlačítko
+   - Nebo samostatná stránka `#pattern-editor` s routingem
+   - Po uložení: pattern se objeví v pattern selection pro planner
+
+5. **Frontend: Pattern preset templates** (30 min)
+   - Tlačítka pro rychlé vytvoření z presetů: "2-sloupcový", "Full-bleed + caption", "Grid 3×2"
+   - Preset vyplní sloty do editoru, uživatel je pak doladí
+
+### Koordinátní systém
+- Spread: 990×720pt (rel 0–1)
+- Levá stránka: x ∈ [0.0, 0.5], Pravá: x ∈ [0.5, 1.0]
+- Marginy: LEFT=57pt (0.058), RIGHT=48pt (0.049), TOP=75pt (0.104), BOTTOM=84pt (0.117)
+- Snap threshold: 5pt (0.005 rel)
+
+### SlotSpec pole (pro formulář editoru)
+```
+slot_id: string       — unikátní ID ("headline", "body_text", "image_1"...)
+slot_type: FrameType  — dropdown (18 typů: hero_image, body_text, headline...)
+rel_x, rel_y: float   — pozice 0–1
+rel_width, rel_height: float — rozměr 0–1
+required: bool        — povinný slot
+allow_bleed: bool     — povolení přesahu přes marginy
+default_style: string — název InDesign stylu (volitelné)
+```
+
+### Validační pravidla
+- Žádné dva sloty se nesmí překrývat (IoU > 0.05 → error)
+- Min rozměr slotu: 5% × 5% spreadu (≈50×36pt)
+- Pattern musí mít alespoň 1 slot
+- Doporučení: alespoň 1 text slot + 1 image slot (warning, ne error)
+- `pattern_id` unikátní a safe (kebab-case)
+
+### Klíčové soubory
+- Edit: `spread_patterns.py`, `routers/layout.py`, `api.js`
+- New: `frontend/src/components/PatternEditor.svelte`, `data/templates/custom_patterns/`
+
+### Výstup session
+- Vizuální drag-and-drop editor pro spread patterns
+- Custom patterns persistované na disku, použitelné v planneru
+- Preset šablony pro rychlé vytvoření
+
+---
+
+## Session 10: Multi-Article — Layout pro celé číslo
+**Cíl:** Sestavit layout z více reportáží/rubrik v jednom IDML souboru.
+
+### Kontext
+Aktuálně planner zpracovává jeden článek → jeden LayoutPlan → jeden IDML.
+Multi-article layout umožní nahrát více článků, přiřadit fotky ke každému,
+naplánovat layout pro celé číslo a vygenerovat jeden IDML s article boundaries.
+
+### Úkoly
+
+1. **Backend: MultiArticleText model** (30 min)
+   - `models_layout.py`: přidat `ArticleItem(BaseModel)` a `MultiArticleText(BaseModel)`
+   ```python
+   class ArticleItem(BaseModel):
+       article_id: str           # "article_1", "bees"
+       headline: str
+       deck: Optional[str]
+       byline: Optional[str]
+       body_paragraphs: list[str]
+       captions: list[str]
+       pull_quotes: list[str]
+       style_profile_id: str = "ng_feature"  # styl per-article
+
+   class MultiArticleText(BaseModel):
+       articles: list[ArticleItem]
+       credits: Optional[str] = None  # sdílený závěrečný text
+   ```
+
+2. **Backend: Multi-article text parser** (30 min)
+   - `text_parser.py`: přidat `parse_multi_article_text(raw_text) → MultiArticleText`
+   - Delimiter mezi články: `===` nebo `# ARTICLE: Název`
+   - Alternativa: upload více textových souborů (každý = jeden článek)
+
+3. **Backend: Multi-article planner** (60 min)
+   - `layout_planner.py`: přidat `plan_multi_article_layout()`
+   - Pro každý článek samostatný `plan_layout()` → seznam `LayoutPlan[]`
+   - `spread_offset` counter pro správné číslování spreadů
+   - Přechodové spready: volitelný "section divider" pattern mezi články
+   - Image allocation: uživatel přiřadí fotky článkům, zbytek auto-distribute
+
+4. **Backend: Multi-article IDML builder** (60 min)
+   - `idml_builder.py`: přidat `build_from_multi_article_plans()`
+   - Každý článek = samostatný threaded story (body text nese sám)
+   - Mezi články NENÍ text threading link → vizuální oddělení
+   - Page numbers continuous (článek 1: strany 1-10, článek 2: 11-18...)
+   - Celkový počet stran: součet všech článků
+
+5. **Backend: API endpointy** (60 min)
+   - `POST /api/layout/multi/upload-articles/{project_id}` — upload N textových souborů
+   - `POST /api/layout/multi/allocate-images/{project_id}` — přiřazení fotek článkům
+   - `POST /api/layout/multi/plan/{project_id}` — naplánuje layout pro celé číslo
+   - `GET /api/layout/multi/plan/{project_id}/progress` — polling
+   - `POST /api/layout/multi/generate/{project_id}` — generuje IDML
+   - Projekt meta.json rozšířen: `articles: [{...}]`, `image_allocation: {article_id: [filenames]}`
+
+6. **Frontend: Multi-article wizard mode** (90 min)
+   - Step 1: checkbox "Multi-article layout" → aktivuje rozšířený flow
+   - Step 3 (Text): místo 1 textarea → dynamický seznam článků
+     - "Přidat článek" → nový blok (headline + textarea nebo file upload)
+     - Drag-and-drop řazení článků
+     - Zobrazení: headline, počet znaků, odhadovaný počet spreadů
+   - Step 2.5 (nový): Image allocation
+     - Vlevo: grid fotek (ze Step 2)
+     - Vpravo: článkové "buckety" — drag fotky do článků
+     - Auto-allocate tlačítko (podle pořadí nebo AI)
+   - Step 5 (Náhled): článkové záložky nad spread gridem
+     - Barevné odlišení spreadů podle článku
+     - Vertikální separator mezi články
+   - Step 6: download jednoho IDML s celým číslem
+
+### Data flow
+```
+Upload N textů  →  parse_multi_article_text()  →  MultiArticleText
+Upload fotek    →  analyze_batch()              →  ImageInfo[]
+Allocate        →  {article_id: [filenames]}    →  image_allocation
+Plan            →  plan_multi_article_layout()  →  LayoutPlan[] (jeden per článek)
+Generate        →  build_from_multi_article_plans() → jeden .idml
+```
+
+### Klíčové designové rozhodnutí
+- **Jeden LayoutPlan per článek** (ne jeden mega-plán) — zachovává modularitu
+- **Body threading per článek** — každý článek má vlastní story chain
+- **Image allocation explicitní** — uživatel řídí, které fotky patří ke kterému článku
+- **Style profile per článek** — jeden článek může být "feature", jiný "short"
+
+### Klíčové soubory
+- Edit: `models_layout.py`, `text_parser.py`, `layout_planner.py`, `idml_builder.py`, `routers/layout.py`, `api.js`, `LayoutWizard.svelte`
+- New: žádné nové moduly (rozšíření stávajících)
+
+### Výstup session
+- Upload a parsování více článků
+- Vizuální přiřazení fotek článkům
+- Plánování a generování multi-article IDML
+- Continuous page numbers, article boundaries
+
+---
+
+## Session 11: Illustrator Integration — Mapy a infografiky v layoutu
+**Cíl:** Propojit Layout Generator s Illustratorem pro tvorbu a editaci map/infografik.
+
+### Kontext
+Projekt už má `illustrator_bridge.py` (Socket.IO → CEP plugin → Illustrator),
+`map_writeback.py` a ExtendScript skripty v `backend/extendscripts/`.
+Tato session propojí Layout Generator s Illustratorem — detekce map v layoutu,
+export šablon do Illustratoru, re-import editovaných map zpět do IDML.
+
+### Předpoklady
+- Illustrator běží s připojeným CEP pluginem (port 3001)
+- Session 10 (Multi-article) nemusí být hotová — funguje i se single-article
+
+### Úkoly
+
+1. **Backend: Map/infographic detector** (30 min)
+   - Nový modul `backend/services/layout/map_detector.py`
+   - `detect_maps(images: list[ImageInfo], captions: list[str]) → list[MapCandidate]`
+   - Heuristiky:
+     - Aspect ratio blízký 1:1 (0.7–1.3) → může být mapa
+     - Filename obsahuje "map", "mapa", "infographic", "diagram"
+     - Caption obsahuje klíčová slova: "mapa", "diagram", "přehled"
+   - Volitelně: Claude Vision analýza (rozpoznat mapy vs fotky)
+   - Output: `MapCandidate(image: ImageInfo, confidence: float, map_type: "map"|"infographic"|"diagram")`
+
+2. **Backend: Illustrator template exporter** (60 min)
+   - Nový modul `backend/services/layout/illustrator_exporter.py`
+   - `export_map_template(slot_bounds: Bounds, style_profile, output_dir) → Path`
+   - Vytvoří `.ai` šablonu přes ExtendScript:
+     - Nový dokument s rozměry slotu (z layout plánu)
+     - Crop marks, bleed guides
+     - Textové rámce pro labely (font z style profile)
+     - Vrátí cestu k uloženému `.ai` souboru
+   - Využití `illustrator_bridge.send_command()` pro komunikaci s Illustratorem
+
+3. **Backend: Map re-import** (30 min)
+   - `import_edited_map(map_path: Path, project_id, slot_id) → Path`
+   - Illustrator → export jako high-res PNG/PDF
+   - Uložit do `data/layout_projects/{id}/maps/`
+   - Při generování IDML: nahradit originální fotku editovanou mapou
+
+4. **Backend: API endpointy** (30 min)
+   - `POST /api/layout/detect-maps/{project_id}` — detekce map ve fotkách
+   - `POST /api/layout/export-map-template/{project_id}` — export šablony do Illustratoru
+   - `POST /api/layout/import-edited-map/{project_id}` — upload editované mapy
+   - `GET /api/layout/maps/{project_id}` — seznam map (detekovaných + editovaných)
+
+5. **Frontend: Map workflow v Step 5** (60 min)
+   - Po plánování: automatická detekce map (async)
+   - V pravém panelu detailu spreadu:
+     - Pokud slot obsahuje detekovanou mapu → "Otevřít v Illustratoru" tlačítko
+     - Status: "Čeká na export" → "Edituje se v Illustratoru" → "Editováno ✓"
+   - Import flow: "Importovat editovanou mapu" → file upload → náhrada v plánu
+   - Thumbnail aktualizace po importu
+
+6. **Integrace s IDML builderem** (30 min)
+   - `idml_builder.py`: při `build_from_plan()` — pokud pro image slot existuje
+     editovaná mapa v `maps/`, použít ji místo originální fotky
+   - `image_paths` mapování rozšířit: check `maps/` dir first, fallback na `images/`
+
+### Workflow uživatele
+```
+1. Nahraje fotky (mix fotek + map/infografik)
+2. Planner rozloží do spreadů
+3. Detector identifikuje mapy (auto nebo manual)
+4. Pro každou mapu:
+   a. Klik "Otevřít v Illustratoru" → export šablony
+   b. Uživatel edituje mapu v Illustratoru
+   c. Klik "Importovat" → upload editované verze
+5. Generování IDML — použije editované mapy místo originálů
+```
+
+### Komunikace s Illustratorem
+```
+Python → Socket.IO (localhost:3001) → Node.js CEP proxy → Illustrator
+         ↕                                    ↕
+  illustrator_bridge.py                ExtendScript (.jsx)
+```
+
+### Klíčové soubory
+- New: `backend/services/layout/map_detector.py`, `backend/services/layout/illustrator_exporter.py`
+- Edit: `routers/layout.py`, `idml_builder.py`, `api.js`, `LayoutWizard.svelte`
+- Existing: `illustrator_bridge.py`, `extendscripts/`
+
+### Rizika
+| Riziko | Mitigace |
+|--------|----------|
+| Illustrator nepřipojený | Graceful degradation — mapy se použijí jako obrázky |
+| ExtendScript selhání | Fallback: manuální export/import (file upload) |
+| Rozměry šablony nesedí s IDML slotem | Validace: porovnat rozměry před importem |
+
+### Výstup session
+- Automatická detekce map ve fotkách
+- Export šablon do Illustratoru
+- Re-import editovaných map
+- IDML generování s editovanými mapami
 
 ---
 
@@ -362,10 +634,11 @@ pro reportáže na základě analýzy existujících NG šablon, nahraných fote
 
 | Závislost | Účel | Stav |
 |-----------|------|------|
-| `Pillow` | Image processing, thumbnaily | Pravděpodobně už v projektu |
-| `Jinja2` | XML šablony pro IDML builder | Nutno přidat |
-| Claude API | Layout planning, image analysis | Již v projektu |
-| `python-docx` | Parsing text z DOCX uploadu | Již v projektu |
+| `Pillow` | Image processing, thumbnaily | ✅ V projektu |
+| `reportlab` | PDF preview | ✅ Přidáno (Session 8) |
+| Claude API | Layout planning, image analysis, caption matching | ✅ V projektu |
+| `python-docx` | Parsing text z DOCX uploadu | ✅ V projektu |
+| Illustrator CEP plugin | Komunikace s Illustratorem | ✅ V projektu (bridge + extendscripts) |
 
 ## Rizika
 
@@ -376,19 +649,25 @@ pro reportáže na základě analýzy existujících NG šablon, nahraných fote
 | Příliš mnoho spread patterns → nepřehledné | Začít s 5-6 ověřenými, rozšiřovat postupně |
 | Performance — velké fotky → pomalý upload | Resize na serveru, progress indikátor |
 | Fonty — NG používá licencované fonty | Skeleton IDML je obsahuje, builder je referencuje |
+| Multi-article threading — story chains across articles | Každý článek = samostatný story chain, bez cross-article threading |
+| Template Editor — overlap detection performance | O(n²) pro N slotů — max ~30 slotů per pattern, performance OK |
 
 ## Odhad rozsahu
 
-| Session | Hlavní téma | Klíčový výstup | Náročnost |
-|---------|------------|----------------|-----------|
-| 1 | Template Analyzer | JSON analýza existujících IDML | ⭐⭐ |
-| 2 | Pattern Library | Katalog spread typů + style profiles | ⭐⭐ |
-| 3 | IDML Builder | Programatická tvorba IDML | ⭐⭐⭐⭐ |
-| 4 | Layout Planner | AI/rule-based kompozice | ⭐⭐⭐ |
-| 5 | Backend API | REST endpointy, pipeline | ⭐⭐ |
-| 6 | Frontend UI | Dashboard redesign + Layout Wizard | ⭐⭐⭐ |
-| 7 | Preview & Polish | Vizuální preview, drag-and-drop, UX | ⭐⭐⭐ |
-| 8 | Pokročilé (opt.) | Style transfer, batch, editor | ⭐⭐ |
+| Session | Hlavní téma | Klíčový výstup | Náročnost | Stav |
+|---------|------------|----------------|-----------|------|
+| 1 | Template Analyzer | JSON analýza existujících IDML | ⭐⭐ | ✅ |
+| 2 | Pattern Library | Katalog spread typů + style profiles | ⭐⭐ | ✅ |
+| 3 | IDML Builder | Programatická tvorba IDML | ⭐⭐⭐⭐ | ✅ |
+| 4 | Layout Planner | AI/rule-based kompozice | ⭐⭐⭐ | ✅ |
+| 5 | Backend API | REST endpointy, pipeline | ⭐⭐ | ✅ |
+| 6 | Frontend UI | Dashboard redesign + Layout Wizard | ⭐⭐⭐ | ✅ |
+| 7 | Preview & Polish | Vizuální preview, drag-and-drop, UX | ⭐⭐⭐ | ✅ |
+| 8 | Pokročilé funkce | Style transfer, batch, PDF, captions | ⭐⭐ | ✅ |
+| 9 | Template Editor | Vizuální editor spread patterns | ⭐⭐⭐ | TODO |
+| 10 | Multi-Article | Layout pro celé číslo | ⭐⭐⭐⭐ | TODO |
+| 11 | Illustrator | Mapy a infografiky v layoutu | ⭐⭐⭐ | TODO |
 
-**Celkem:** 7 povinných sessions + 1 volitelná
-**Kritická cesta:** Session 1 → 2 → 3 → 4 → 5 → 6 → 7 (sekvenční závislost)
+**Sessions 1–8:** ✅ Hotovo
+**Sessions 9–11:** Připravené plány, nezávislé (lze dělat v libovolném pořadí)
+**Doporučené pořadí:** 9 → 10 → 11 (Template Editor je nejjednodušší, Multi-article nejkomplexnější)

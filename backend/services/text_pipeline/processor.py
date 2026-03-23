@@ -2,6 +2,8 @@
 
 Provides streaming API calls with adaptive thinking, prompt caching,
 structured outputs, and server-side tools (web_search, web_fetch, code_execution).
+
+Refactored: používá core.engine Engine abstrakci pro LLM volání.
 """
 
 import os
@@ -18,12 +20,10 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
 
-logger = logging.getLogger(__name__)
+from core.engine import MODEL_OPUS, MODEL_SONNET, MODEL_HAIKU, get_engine
+from core.traces import TraceCollector, get_trace_store
 
-# Model constants
-MODEL_OPUS = "claude-opus-4-6"
-MODEL_SONNET = "claude-sonnet-4-6"
-MODEL_HAIKU = "claude-haiku-4-5-20251001"
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -41,7 +41,11 @@ class ProcessingResult:
 
 
 class ClaudeProcessor:
-    """Procesor pro volání Claude API s prompty z projektů."""
+    """Procesor pro volání Claude API s prompty z projektů.
+
+    Používá core.engine Engine abstrakci — sjednocený přístup k LLM.
+    Zachovává zpětnou kompatibilitu (self.client pro streaming).
+    """
 
     DEFAULT_MODEL = MODEL_SONNET
     MAX_TOKENS = 16000
@@ -56,18 +60,27 @@ class ClaudeProcessor:
 
         self.model = model or self.DEFAULT_MODEL
 
+        # Engine abstrakce pro trace tracking
+        self._engine = get_engine()
+        self._collector = TraceCollector(
+            self._engine, get_trace_store(),
+            module=self.__class__.__name__,
+        )
+
+        # Přímý klient pro streaming (engine.generate_stream to řeší, ale
+        # tady potřebujeme granulární kontrolu nad stream events)
         if ANTHROPIC_AVAILABLE and self.api_key:
             self.client = anthropic.Anthropic(
                 api_key=self.api_key,
                 timeout=600.0
             )
         else:
-            self.client = None
+            self.client = self._engine.client if hasattr(self._engine, 'client') else None
 
         self._prompt_cache: Dict[str, str] = {}
 
     def is_available(self) -> bool:
-        return ANTHROPIC_AVAILABLE and bool(self.api_key) and self.client is not None
+        return self._engine.health()
 
     def load_project_prompt(self, project_dir: Path) -> str:
         """Načte prompt z projektové složky (MASTER > INSTRUCTION > README)."""
@@ -133,9 +146,14 @@ class ClaudeProcessor:
             user_message = f"{user_instruction}\n\n---\n\n{content}"
 
         try:
+            import time as _time
+            _t_start = _time.perf_counter()
+
             result_content = ""
             input_tokens = 0
             output_tokens = 0
+            cache_read = 0
+            cache_write = 0
             stop_reason = None
 
             efficiency_hint = "\n\n[EFFICIENCY] Respond directly and concisely. Use extended thinking only when it meaningfully improves quality for multi-step reasoning."
@@ -214,6 +232,31 @@ class ClaudeProcessor:
                 result_content = re.sub(r'<tool_call>.*?</tool_call>', '', result_content, flags=re.DOTALL)
                 result_content = re.sub(r'<tool_response>.*?</tool_response>', '', result_content, flags=re.DOTALL)
                 result_content = result_content.strip()
+
+            # Zaznamenat trace
+            _elapsed = _time.perf_counter() - _t_start
+            from core.traces import Trace
+            from core.engine import _estimate_cost
+            import uuid as _uuid
+            from datetime import datetime as _dt
+
+            _cost = _estimate_cost(
+                self.model, input_tokens, output_tokens,
+                cache_read or 0, cache_write or 0,
+            )
+            self._collector.store.record(Trace(
+                trace_id=str(_uuid.uuid4())[:12],
+                timestamp=_dt.utcnow().isoformat() + "Z",
+                module=self._collector.module,
+                model=self.model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_read_tokens=cache_read or 0,
+                cache_creation_tokens=cache_write or 0,
+                latency_seconds=_elapsed,
+                cost_usd=_cost,
+                success=True,
+            ))
 
             return ProcessingResult(
                 success=True,

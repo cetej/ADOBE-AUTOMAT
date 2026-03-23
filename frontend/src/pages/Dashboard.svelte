@@ -309,6 +309,12 @@
       >
         Novy layout
       </button>
+      <button
+        class="w-full mt-2 py-2 bg-white border border-gray-200 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-50 hover:border-indigo-300 transition-colors"
+        onclick={() => navigate('pattern-editor')}
+      >
+        Editor patternu
+      </button>
     </div>
   </div>
 
