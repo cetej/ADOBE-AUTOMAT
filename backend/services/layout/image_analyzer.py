@@ -169,14 +169,15 @@ async def analyze_image_content_ai(
 
     Používá Claude API s vision capability.
     """
-    import anthropic
     import base64
+    from core.engine import get_engine, MODEL_SONNET
 
     path = Path(path)
-    api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    if not api_key and not os.environ.get("ANTHROPIC_API_KEY"):
         logger.warning("ANTHROPIC_API_KEY nedostupný, přeskakuji AI analýzu")
         return ""
+
+    engine = get_engine()
 
     # Načti obrázek jako base64
     suffix = path.suffix.lower()
@@ -190,12 +191,8 @@ async def analyze_image_content_ai(
     with open(path, "rb") as f:
         image_data = base64.standard_b64encode(f.read()).decode("utf-8")
 
-    client = anthropic.Anthropic(api_key=api_key)
-
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=100,
+        result = engine.generate(
             messages=[{
                 "role": "user",
                 "content": [
@@ -218,8 +215,10 @@ async def analyze_image_content_ai(
                     },
                 ],
             }],
+            model=MODEL_SONNET,
+            max_tokens=100,
         )
-        hint = response.content[0].text.strip().lower()
+        hint = result.content.strip().lower()
         logger.info("AI content hint pro %s: %s", path.name, hint)
         return hint
     except Exception as e:

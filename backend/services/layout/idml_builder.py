@@ -18,6 +18,7 @@ from typing import Optional
 from models_layout import (
     Bounds, FrameType, LayoutPlan, MultiArticlePlan, PlannedSpread,
     SlotSpec, SpreadPattern, StyleInfo, StyleProfile,
+    NG_PAGE_WIDTH, NG_PAGE_HEIGHT, NG_SPREAD_WIDTH, NG_SPREAD_HEIGHT,
 )
 from services.layout.spread_patterns import (
     get_pattern, instantiate_pattern,
@@ -29,10 +30,11 @@ from services.layout.style_profiles import (
 logger = logging.getLogger(__name__)
 
 # NG stránka: 495×720 pt, spread = 2 stránky = 990×720 pt
-PAGE_WIDTH = 495.0
-PAGE_HEIGHT = 720.0
-SPREAD_WIDTH = 990.0
-SPREAD_HEIGHT = 720.0
+# Konstanty importovány z models_layout (NG_PAGE_WIDTH atd.)
+PAGE_WIDTH = NG_PAGE_WIDTH
+PAGE_HEIGHT = NG_PAGE_HEIGHT
+SPREAD_WIDTH = NG_SPREAD_WIDTH
+SPREAD_HEIGHT = NG_SPREAD_HEIGHT
 
 # Offset: spread souřadnice mají (0,0) uprostřed spreadu
 # Levá stránka: ItemTransform "1 0 0 1 -495 -360"
@@ -1059,6 +1061,100 @@ class IDMLBuilder:
 
 # ----- Convenience funkce -----
 
+def _build_content_map(
+    planned_spread: "PlannedSpread",
+    text_sections: dict[str, str],
+    pattern: "SpreadPattern",
+) -> dict[str, str]:
+    """Sestaví content_map z přiřazených text sekcí pro jeden spread.
+
+    Mapuje planner section IDs (body_{i}, caption_{j}, pull_quote_{i},
+    closing_text, bio, credits) na pattern slot IDs.
+
+    Args:
+        planned_spread: Spread s assigned_text_sections.
+        text_sections: Mapování section_id → text.
+        pattern: Pattern spreadu (pro zjištění dostupných slot IDs).
+
+    Returns:
+        Dict {slot_id: text} pro předání do add_spread / add_single_page_spread.
+    """
+    content_map: dict[str, str] = {}
+    pattern_slot_ids = {slot.slot_id for slot in pattern.slots}
+    caption_slots = [s.slot_id for s in pattern.slots
+                     if s.slot_id.startswith("caption")]
+    caption_slot_idx = 0
+
+    for section_id in planned_spread.assigned_text_sections:
+        if section_id not in text_sections:
+            continue
+        text_val = text_sections[section_id]
+
+        # Přímý match (headline, deck, byline, folio — NE body/caption/pull_quote,
+        # ty vždy mapovat sekvenčně)
+        if (section_id in pattern_slot_ids
+                and not section_id.startswith("body_")
+                and not section_id.startswith("caption_")
+                and not section_id.startswith("pull_quote_")):
+            content_map[section_id] = text_val
+        # body_{i} → slot "body_text", fallback na "sidebar"
+        elif section_id.startswith("body_"):
+            target = "body_text" if "body_text" in pattern_slot_ids else (
+                "sidebar" if "sidebar" in pattern_slot_ids else None)
+            if target:
+                if target in content_map:
+                    content_map[target] += "\n" + text_val
+                else:
+                    content_map[target] = text_val
+        # caption_{j} → první volný caption slot v patternu
+        elif section_id.startswith("caption_"):
+            if caption_slot_idx < len(caption_slots):
+                content_map[caption_slots[caption_slot_idx]] = text_val
+                caption_slot_idx += 1
+            elif "caption" in pattern_slot_ids:
+                content_map["caption"] = text_val
+        # pull_quote_{i} → slot "pull_quote" (pokud existuje v patternu)
+        elif section_id.startswith("pull_quote_"):
+            if "pull_quote" in pattern_slot_ids:
+                content_map["pull_quote"] = text_val
+        # closing_text → body_text (closing pattern má body_text slot)
+        elif section_id == "closing_text":
+            if "body_text" in pattern_slot_ids:
+                content_map["body_text"] = text_val
+        # bio → sidebar
+        elif section_id == "bio":
+            if "sidebar" in pattern_slot_ids:
+                content_map["sidebar"] = text_val
+        # credits → credit
+        elif section_id == "credits":
+            if "credit" in pattern_slot_ids:
+                content_map["credit"] = text_val
+        else:
+            logger.warning("Neznámý section_id '%s', přeskakuji", section_id)
+
+    return content_map
+
+
+def _build_image_map(
+    pattern: "SpreadPattern",
+    imgs: list[str],
+    maps_dir: Optional[Path] = None,
+) -> dict[str, str]:
+    """Sestaví image_map pro spread — s volitelným map override."""
+    image_map: dict[str, str] = {}
+    img_idx = 0
+    for slot in pattern.slots:
+        if slot.slot_type in (FrameType.HERO_IMAGE, FrameType.BODY_IMAGE, FrameType.MAP_ART):
+            if img_idx < len(imgs):
+                img_path = imgs[img_idx]
+                if maps_dir and maps_dir.exists():
+                    from services.layout.illustrator_exporter import resolve_image_with_maps
+                    img_path = resolve_image_with_maps(img_path, slot.slot_id, maps_dir)
+                image_map[slot.slot_id] = img_path
+                img_idx += 1
+    return image_map
+
+
 def build_from_plan(
     layout_plan: LayoutPlan,
     skeleton_idml: str | Path,
@@ -1097,77 +1193,9 @@ def build_from_plan(
             raise ValueError(f"Pattern not found: {planned_spread.pattern_id}")
 
         # Sestavit content_map z přiřazených text sekcí
-        # MAPOVÁNÍ: planner section IDs → pattern slot IDs
-        # Planner přiřazuje: body_{i}, caption_{j}, pull_quote_{i}, closing_text, bio, credits
-        # Patterny mají sloty: body_text, caption/caption_1/caption_2, sidebar, credit, ...
-        content_map = {}
-        pattern_slot_ids = {slot.slot_id for slot in pattern.slots}
-        caption_slot_idx = 0  # pro iteraci přes caption sloty v patternu
-        caption_slots = [s.slot_id for s in pattern.slots
-                         if s.slot_id.startswith("caption")]
+        content_map = _build_content_map(planned_spread, text_sections, pattern)
 
-        for section_id in planned_spread.assigned_text_sections:
-            if section_id not in text_sections:
-                continue
-            text_val = text_sections[section_id]
-
-            # Přímý match (headline, deck, byline, folio — NE body/caption/pull_quote,
-            # ty vždy mapovat sekvenčně)
-            if (section_id in pattern_slot_ids
-                    and not section_id.startswith("body_")
-                    and not section_id.startswith("caption_")
-                    and not section_id.startswith("pull_quote_")):
-                content_map[section_id] = text_val
-            # body_{i} → slot "body_text", fallback na "sidebar"
-            elif section_id.startswith("body_"):
-                target = "body_text" if "body_text" in pattern_slot_ids else (
-                    "sidebar" if "sidebar" in pattern_slot_ids else None)
-                if target:
-                    if target in content_map:
-                        content_map[target] += "\n" + text_val
-                    else:
-                        content_map[target] = text_val
-            # caption_{j} → první volný caption slot v patternu
-            elif section_id.startswith("caption_"):
-                if caption_slot_idx < len(caption_slots):
-                    content_map[caption_slots[caption_slot_idx]] = text_val
-                    caption_slot_idx += 1
-                elif "caption" in pattern_slot_ids:
-                    # Fallback: jednoduchý "caption" slot
-                    content_map["caption"] = text_val
-            # pull_quote_{i} → slot "pull_quote" (pokud existuje v patternu)
-            elif section_id.startswith("pull_quote_"):
-                if "pull_quote" in pattern_slot_ids:
-                    content_map["pull_quote"] = text_val
-            # closing_text → body_text (closing pattern má body_text slot)
-            elif section_id == "closing_text":
-                if "body_text" in pattern_slot_ids:
-                    content_map["body_text"] = text_val
-            # bio → sidebar
-            elif section_id == "bio":
-                if "sidebar" in pattern_slot_ids:
-                    content_map["sidebar"] = text_val
-            # credits → credit
-            elif section_id == "credits":
-                if "credit" in pattern_slot_ids:
-                    content_map["credit"] = text_val
-            else:
-                logger.warning("Neznámý section_id '%s', přeskakuji", section_id)
-
-        # Sestavit image_map — s map override
-        imgs = image_paths.get(str(planned_spread.spread_index), [])
-        image_map = {}
-        img_idx = 0
-        for slot in pattern.slots:
-            if slot.slot_type in (FrameType.HERO_IMAGE, FrameType.BODY_IMAGE, FrameType.MAP_ART):
-                if img_idx < len(imgs):
-                    img_path = imgs[img_idx]
-                    # Check maps_dir pro editovanou mapu
-                    if maps_dir and maps_dir.exists():
-                        from services.layout.illustrator_exporter import resolve_image_with_maps
-                        img_path = resolve_image_with_maps(img_path, slot.slot_id, maps_dir)
-                    image_map[slot.slot_id] = img_path
-                    img_idx += 1
+        image_map = _build_image_map(pattern, imgs=image_paths.get(str(planned_spread.spread_index), []), maps_dir=maps_dir)
 
         page_num = planned_spread.spread_index * 2 + 1
 
@@ -1191,6 +1219,7 @@ def build_from_multi_article_plans(
     output_path: str | Path,
     article_text_sections: dict[str, dict[str, str]] | None = None,
     article_image_paths: dict[str, dict[str, list[str]]] | None = None,
+    article_maps_dirs: dict[str, Path] | None = None,
 ) -> Path:
     """Vytvoří jeden IDML z multi-article plánu.
 
@@ -1203,12 +1232,14 @@ def build_from_multi_article_plans(
         output_path: Kam uložit výstupní IDML.
         article_text_sections: {article_id: {section_id: text}} — texty per article.
         article_image_paths: {article_id: {spread_index: [paths]}} — fotky per article.
+        article_maps_dirs: {article_id: maps_dir_path} — adresáře s editovanými mapami per article.
 
     Returns:
         Path k vytvořenému IDML.
     """
     article_text_sections = article_text_sections or {}
     article_image_paths = article_image_paths or {}
+    article_maps_dirs = article_maps_dirs or {}
 
     builder = IDMLBuilder(skeleton_idml)
     global_page_num = 1
@@ -1226,58 +1257,16 @@ def build_from_multi_article_plans(
             if not pattern:
                 raise ValueError(f"Pattern not found: {planned_spread.pattern_id}")
 
-            # Sestavit content_map — s mapováním planner IDs → slot IDs
-            content_map = {}
-            pattern_slot_ids = {slot.slot_id for slot in pattern.slots}
-            caption_slot_idx = 0
-            caption_slots = [s.slot_id for s in pattern.slots
-                             if s.slot_id.startswith("caption")]
+            # Sestavit content_map z přiřazených text sekcí
+            content_map = _build_content_map(planned_spread, text_sections, pattern)
 
-            for section_id in planned_spread.assigned_text_sections:
-                if section_id not in text_sections:
-                    continue
-                text_val = text_sections[section_id]
-                if (section_id in pattern_slot_ids
-                        and not section_id.startswith("body_")
-                        and not section_id.startswith("caption_")
-                        and not section_id.startswith("pull_quote_")):
-                    content_map[section_id] = text_val
-                elif section_id.startswith("body_"):
-                    target = "body_text" if "body_text" in pattern_slot_ids else (
-                        "sidebar" if "sidebar" in pattern_slot_ids else None)
-                    if target:
-                        if target in content_map:
-                            content_map[target] += "\n" + text_val
-                        else:
-                            content_map[target] = text_val
-                elif section_id.startswith("caption_"):
-                    if caption_slot_idx < len(caption_slots):
-                        content_map[caption_slots[caption_slot_idx]] = text_val
-                        caption_slot_idx += 1
-                    elif "caption" in pattern_slot_ids:
-                        content_map["caption"] = text_val
-                elif section_id.startswith("pull_quote_"):
-                    if "pull_quote" in pattern_slot_ids:
-                        content_map["pull_quote"] = text_val
-                elif section_id == "closing_text":
-                    if "body_text" in pattern_slot_ids:
-                        content_map["body_text"] = text_val
-                elif section_id == "bio":
-                    if "sidebar" in pattern_slot_ids:
-                        content_map["sidebar"] = text_val
-                elif section_id == "credits":
-                    if "credit" in pattern_slot_ids:
-                        content_map["credit"] = text_val
-
-            # Sestavit image_map
-            imgs = image_paths.get(str(planned_spread.spread_index), [])
-            image_map = {}
-            img_idx = 0
-            for slot in pattern.slots:
-                if slot.slot_type in (FrameType.HERO_IMAGE, FrameType.BODY_IMAGE):
-                    if img_idx < len(imgs):
-                        image_map[slot.slot_id] = imgs[img_idx]
-                        img_idx += 1
+            # Sestavit image_map — s map override (MAP_ART sloty jsou zahrnuty)
+            maps_dir = article_maps_dirs.get(article_plan.project_id)
+            image_map = _build_image_map(
+                pattern,
+                imgs=image_paths.get(str(planned_spread.spread_index), []),
+                maps_dir=maps_dir,
+            )
 
             if planned_spread.spread_type.value == "cover":
                 builder.add_single_page_spread(

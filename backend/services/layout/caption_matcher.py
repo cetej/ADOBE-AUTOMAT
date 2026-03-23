@@ -79,9 +79,9 @@ def _match_ai(paths: list[Path], captions: list[str], api_key: str) -> list[dict
     Krok 1: Pošle všechny fotky + captions Claudeovi
     Krok 2: Claude vrátí JSON s přiřazením
     """
-    import anthropic
+    from core.engine import get_engine, MODEL_SONNET
 
-    client = anthropic.Anthropic(api_key=api_key)
+    engine = get_engine()
 
     # Připravit obsah zprávy — fotky jako base64 + captions jako text
     content = []
@@ -131,14 +131,14 @@ Match each caption to exactly one photo. If a caption doesn't match any photo we
 Return ONLY the JSON array, no other text.""",
     })
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=2000,
+    result = engine.generate(
         messages=[{"role": "user", "content": content}],
+        model=MODEL_SONNET,
+        max_tokens=2000,
     )
 
     # Parsovat odpověď
-    response_text = response.content[0].text.strip()
+    response_text = result.content.strip()
     # Vyčistit markdown wrapper pokud přítomen
     if response_text.startswith("```"):
         lines = response_text.split("\n")

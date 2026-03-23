@@ -8,6 +8,12 @@ _No active task._
 
 ## Task History
 
+### 2026-03-23 — Layout Generator Quality Audit
+- **Goal**: Dedup, refactor 3+× patterns, spec compliance, verify on test article
+- **Tier**: standard (3 agents, 1 critic round)
+- **Result**: 5 issues found (2 HIGH, 2 MEDIUM, 1 LOW). Fixed: content-map dedup (60 lines → helper), MAP_ART bug in multi-article, shared constants, engine abstraction migration (2 files). IDML e2e build verified.
+- **Budget**: 3 agent spawns / 4 limit, 1 critic / 2 limit
+
 ### 2026-03-18 — Audit & Review projektu ADOBE-AUTOMAT
 - **Goal**: Full project audit — backend, frontend, infrastructure
 - **Tier**: standard (3 agents, 0 critics)

@@ -5,6 +5,13 @@ from enum import Enum
 from typing import Optional
 
 
+# NG magazine page dimensions (points)
+NG_PAGE_WIDTH = 495.0
+NG_PAGE_HEIGHT = 720.0
+NG_SPREAD_WIDTH = 990.0
+NG_SPREAD_HEIGHT = 720.0
+
+
 # === Enums pro Layout Planner (Session 4) ===
 
 class ImagePriority(str, Enum):

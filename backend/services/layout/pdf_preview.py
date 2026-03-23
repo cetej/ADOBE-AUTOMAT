@@ -9,6 +9,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from models_layout import NG_PAGE_WIDTH, NG_SPREAD_WIDTH, NG_SPREAD_HEIGHT
+
 logger = logging.getLogger(__name__)
 
 # Barvy pro typy slotů (RGB 0-1)
@@ -40,10 +42,10 @@ SLOT_LABELS = {
     "sidebar": "Sidebar",
 }
 
-# NG standard spread rozměry (pt)
-SPREAD_WIDTH = 990  # 2x 495pt stránky
-SPREAD_HEIGHT = 720
-PAGE_WIDTH = 495
+# NG standard spread rozměry (pt) — importovány z models_layout
+SPREAD_WIDTH = NG_SPREAD_WIDTH
+SPREAD_HEIGHT = NG_SPREAD_HEIGHT
+PAGE_WIDTH = NG_PAGE_WIDTH
 MARGIN = {"top": 75, "bottom": 84, "left": 57, "right": 48}
 
 
