@@ -1,0 +1,40 @@
+# Dippy — ADOBE-AUTOMAT project config
+
+# Python backend — uvicorn, moduly
+allow python -m uvicorn *
+allow python -m dippy *
+allow python backend/*
+allow python -c "import *"
+
+# pip install — v tomto projektu povoleno
+allow pip install *
+
+# Frontend build
+allow cd frontend *
+allow npm install|
+allow npm run build|
+allow npm run dev|
+
+# Claude/API tools
+allow claude *
+
+# MCP servery — povolené
+allow-mcp mcp__github__*
+allow-mcp mcp__brave-search__*
+allow-mcp mcp__context7__*
+allow-mcp mcp__filesystem__read*
+allow-mcp mcp__filesystem__list*
+allow-mcp mcp__filesystem__get*
+allow-mcp mcp__filesystem__search*
+allow-mcp mcp__filesystem__directory*
+
+# MCP — write operace ptát se
+ask-mcp mcp__filesystem__write_file
+ask-mcp mcp__filesystem__edit_file
+ask-mcp mcp__filesystem__create_directory
+ask-mcp mcp__filesystem__move_file
+
+# Redirect — logování OK
+allow-redirect data/layout_projects/**
+allow-redirect data/templates/**
+allow-redirect /dev/null
