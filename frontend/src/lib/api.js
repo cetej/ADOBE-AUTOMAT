@@ -163,4 +163,11 @@ export const api = {
   layoutGenerate: (projectId, opts = {}) => request('POST', `/layout/generate/${projectId}`, opts),
   layoutGenerateProgress: (projectId) => request('GET', `/layout/generate/${projectId}/progress`),
   layoutDownloadUrl: (projectId) => `${BASE}/layout/download/${projectId}`,
+
+  // Session 7: Preview & Polish
+  layoutThumbnailUrl: (projectId, filename, size = 200) =>
+    `${BASE}/layout/thumbnail/${projectId}/${encodeURIComponent(filename)}?size=${size}`,
+  layoutPlanDetail: (projectId) => request('GET', `/layout/plan-detail/${projectId}`),
+  layoutUpdatePlan: (projectId, updates) => request('POST', `/layout/update-plan/${projectId}`, updates),
+  layoutValidate: (projectId) => request('GET', `/layout/validate/${projectId}`),
 };

@@ -2,6 +2,7 @@
   import { api } from '../lib/api.js';
   import { notify } from '../stores/notifications.js';
   import { navigate } from '../stores/router.js';
+  import SpreadPreview from '../components/SpreadPreview.svelte';
 
   // Props — projectId z URL hash
   let { projectId = null, initialStyle = 'ng_feature' } = $props();
@@ -31,22 +32,30 @@
   let numPages = $state('auto');
   let useAi = $state(false);
 
-  // Step 5: Plan preview
+  // Step 5: Plan preview (Session 7 — detailní preview)
   let planResult = $state(null);
+  let planDetail = $state(null);      // z plan-detail API (se sloty)
   let planning = $state(false);
   let planMessage = $state('');
+  let selectedSpreadIdx = $state(null);
+  let selectedSlot = $state(null);     // detail vybraného slotu
+  let draggedImage = $state(null);     // filename přetahované fotky
+  let updatingPlan = $state(false);
 
   // Step 6: Generate
   let generating = $state(false);
   let generateMessage = $state('');
   let generateResult = $state(null);
 
+  // Validation
+  let validation = $state(null);
+
   const STEPS = [
     { num: 1, label: 'Styl' },
     { num: 2, label: 'Fotky' },
     { num: 3, label: 'Text' },
     { num: 4, label: 'Nastaveni' },
-    { num: 5, label: 'Plan' },
+    { num: 5, label: 'Nahled' },
     { num: 6, label: 'Generovani' },
   ];
 
@@ -79,7 +88,7 @@
         }
         // Urcit krok podle faze
         if (projectMeta.generated_idml) step = 6;
-        else if (projectMeta.plan) step = 5;
+        else if (projectMeta.plan) { step = 5; loadPlanDetail(); }
         else if (projectMeta.article) step = 4;
         else if (uploadedImages.length) step = 3;
         else step = 1;
@@ -89,6 +98,27 @@
     }
   }
   init();
+
+  // === Validace ===
+  async function runValidation() {
+    if (!createdProjectId) return;
+    try {
+      validation = await api.layoutValidate(createdProjectId);
+    } catch (e) {
+      // Tichá chyba
+    }
+  }
+
+  // === Plan detail (Session 7) ===
+  async function loadPlanDetail() {
+    if (!createdProjectId) return;
+    try {
+      planDetail = await api.layoutPlanDetail(createdProjectId);
+    } catch (e) {
+      // Fallback — zůstaneme u planResult
+      planDetail = null;
+    }
+  }
 
   // === Step 1: Volba stylu + vytvoreni projektu ===
   async function createProject() {
@@ -180,6 +210,7 @@
       textInfo = result;
       notify('Text nahran a rozparsovan', 'success');
       step = 4;
+      runValidation();
     } catch (e) {
       notify('Chyba: ' + e.message, 'error');
     } finally {
@@ -193,6 +224,7 @@
     planning = true;
     planMessage = 'Spoustim planovani...';
     planResult = null;
+    planDetail = null;
 
     try {
       await api.layoutPlan(createdProjectId, {
@@ -211,6 +243,8 @@
           planResult = prog.result?.plan || prog.result;
           done = true;
           step = 5;
+          loadPlanDetail();
+          runValidation();
         } else if (prog.status === 'error') {
           notify('Chyba planovani: ' + prog.message, 'error');
           done = true;
@@ -220,6 +254,71 @@
       notify('Chyba: ' + e.message, 'error');
     } finally {
       planning = false;
+    }
+  }
+
+  // === Step 5: Drag & drop editace plánu ===
+  function handleSpreadSelect(spread) {
+    selectedSpreadIdx = spread.spread_index;
+    selectedSlot = null;
+  }
+
+  function handleSlotClick(detail) {
+    selectedSlot = detail;
+  }
+
+  function handleImageDragStart(imgFilename) {
+    draggedImage = imgFilename;
+  }
+
+  function handleImageDragEnd() {
+    draggedImage = null;
+  }
+
+  async function handleImageDropOnSlot(detail) {
+    if (!createdProjectId || updatingPlan) return;
+    updatingPlan = true;
+    try {
+      // Zjistit, z jakého spreadu fotka pochází
+      const fromSpread = planDetail?.spreads?.findIndex(s =>
+        s.assigned_images?.some(img => img.filename === detail.image)
+      ) ?? -1;
+
+      if (fromSpread >= 0) {
+        await api.layoutUpdatePlan(createdProjectId, {
+          move_image_to_spread: {
+            image: detail.image,
+            from_spread: fromSpread,
+            to_spread: detail.spread.spread_index,
+          }
+        });
+      }
+      await loadPlanDetail();
+      notify('Fotka presunuta', 'success');
+    } catch (e) {
+      notify('Chyba: ' + e.message, 'error');
+    } finally {
+      updatingPlan = false;
+    }
+  }
+
+  async function moveSpread(from, to) {
+    if (!createdProjectId || !planDetail || updatingPlan) return;
+    const count = planDetail.spreads.length;
+    if (to < 0 || to >= count) return;
+    updatingPlan = true;
+    try {
+      const order = Array.from({ length: count }, (_, i) => i);
+      [order[from], order[to]] = [order[to], order[from]];
+      const result = await api.layoutUpdatePlan(createdProjectId, { spread_order: order });
+      planResult = result.plan;
+      await loadPlanDetail();
+      selectedSpreadIdx = to;
+      notify('Spread presunut', 'success');
+    } catch (e) {
+      notify('Chyba: ' + e.message, 'error');
+    } finally {
+      updatingPlan = false;
     }
   }
 
@@ -257,9 +356,36 @@
     if (!createdProjectId) return;
     window.open(api.layoutDownloadUrl(createdProjectId), '_blank');
   }
+
+  // Keyboard shortcuts
+  function handleKeydown(e) {
+    // Escape = zpet
+    if (e.key === 'Escape' && step > 1) {
+      step = step - 1;
+      if (step === 5) loadPlanDetail();
+    }
+    // Enter = dal krok (pokud neni v textarea)
+    if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'INPUT') {
+      if (step === 1) createProject();
+    }
+    // Arrow keys v step 5 — navigace spreadu
+    if (step === 5 && planDetail?.spreads) {
+      const count = planDetail.spreads.length;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        selectedSpreadIdx = selectedSpreadIdx != null ? Math.min(selectedSpreadIdx + 1, count - 1) : 0;
+      }
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        selectedSpreadIdx = selectedSpreadIdx != null ? Math.max(selectedSpreadIdx - 1, 0) : 0;
+      }
+    }
+  }
 </script>
 
-<div class="max-w-4xl mx-auto">
+<svelte:window onkeydown={handleKeydown} />
+
+<div class="max-w-5xl mx-auto">
   <!-- Header -->
   <div class="flex items-center justify-between mb-6">
     <div class="flex items-center gap-3">
@@ -294,6 +420,28 @@
       </div>
     {/each}
   </div>
+
+  <!-- Validation warnings (zobrazí se od step 4+) -->
+  {#if validation && step >= 4}
+    {#if validation.errors?.length > 0}
+      <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+        {#each validation.errors as err}
+          <div class="text-sm text-red-700 flex items-center gap-2">
+            <span class="text-red-500 font-bold">!</span> {err.message}
+          </div>
+        {/each}
+      </div>
+    {/if}
+    {#if validation.warnings?.length > 0}
+      <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-1">
+        {#each validation.warnings as warn}
+          <div class="text-xs text-amber-700 flex items-center gap-2">
+            <span class="text-amber-500">&#x26A0;</span> {warn.message}
+          </div>
+        {/each}
+      </div>
+    {/if}
+  {/if}
 
   <!-- STEP 1: Styl -->
   {#if step === 1}
@@ -472,7 +620,7 @@ Text clanku..."
       <!-- Pocet stran -->
       <div class="mb-4">
         <label class="block text-sm font-medium text-gray-700 mb-2">Pocet stran</label>
-        <div class="flex gap-2">
+        <div class="flex gap-2 flex-wrap">
           <button
             class="px-4 py-2 rounded-lg border text-sm transition-colors
                    {numPages === 'auto' ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-600 hover:border-gray-300'}"
@@ -528,42 +676,202 @@ Text clanku..."
       </div>
     </div>
 
-  <!-- STEP 5: Plan preview -->
+  <!-- STEP 5: Plan preview — Session 7 nový design -->
   {:else if step === 5}
     <div class="bg-white rounded-xl border border-gray-200 p-6">
-      <h2 class="text-lg font-bold text-gray-900 mb-4">Nahled planu</h2>
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-bold text-gray-900">Nahled planu</h2>
+        {#if planResult || planDetail}
+          <div class="flex items-center gap-2 text-xs text-gray-500">
+            <span class="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-medium">
+              {planDetail?.total_pages || planResult?.total_pages || '?'} stran
+            </span>
+            <span class="bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+              {planDetail?.spreads?.length || planResult?.spreads?.length || '?'} spreadu
+            </span>
+          </div>
+        {/if}
+      </div>
 
-      {#if planResult}
-        <div class="mb-4 p-3 bg-indigo-50 rounded-lg text-sm text-indigo-800">
-          {planResult.total_pages || '?'} stran, {planResult.spreads?.length || '?'} spreadu
+      {#if planDetail?.spreads}
+        <!-- Hlavní layout: spreads grid + detail panel -->
+        <div class="flex gap-4 mb-6" style="min-height: 400px;">
+          <!-- Levý panel: Spread miniaturky se řazením -->
+          <div class="w-2/3 space-y-3">
+            <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
+              <span>Klikni na spread pro detail, pretahni fotky mezi spready</span>
+              <span class="text-gray-400">Sipky: navigace</span>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+              {#each planDetail.spreads as spread, idx}
+                <div class="relative">
+                  <!-- Spread reorder tlačítka -->
+                  <div class="absolute -left-6 top-1/2 -translate-y-1/2 flex flex-col gap-1 z-10">
+                    <button
+                      class="w-5 h-5 bg-gray-100 hover:bg-gray-200 rounded text-xs text-gray-500 disabled:opacity-30"
+                      disabled={idx === 0 || updatingPlan}
+                      onclick={() => moveSpread(idx, idx - 1)}
+                      title="Posunout nahoru"
+                    >&#x25B2;</button>
+                    <button
+                      class="w-5 h-5 bg-gray-100 hover:bg-gray-200 rounded text-xs text-gray-500 disabled:opacity-30"
+                      disabled={idx === planDetail.spreads.length - 1 || updatingPlan}
+                      onclick={() => moveSpread(idx, idx + 1)}
+                      title="Posunout dolu"
+                    >&#x25BC;</button>
+                  </div>
+
+                  <!-- Spread číslo -->
+                  <div class="text-[10px] text-gray-400 mb-1 ml-1">
+                    Spread {idx + 1}
+                    {#if spread.assigned_images?.length}
+                      &middot; {spread.assigned_images.length} fotek
+                    {/if}
+                  </div>
+
+                  <SpreadPreview
+                    {spread}
+                    projectId={createdProjectId}
+                    width={380}
+                    selected={selectedSpreadIdx === idx}
+                    onSelect={handleSpreadSelect}
+                    onSlotClick={handleSlotClick}
+                    onImageDrop={handleImageDropOnSlot}
+                    {draggedImage}
+                  />
+                </div>
+              {/each}
+            </div>
+          </div>
+
+          <!-- Pravý panel: Detail vybraného spreadu / slotu -->
+          <div class="w-1/3 border-l border-gray-200 pl-4">
+            {#if selectedSlot}
+              <!-- Detail vybraného slotu -->
+              <div class="space-y-3">
+                <h3 class="text-sm font-bold text-gray-800">
+                  Slot: {selectedSlot.slot.slot_id}
+                </h3>
+                <div class="text-xs space-y-1 text-gray-600">
+                  <div>Typ: <strong class="text-gray-800">{selectedSlot.slot.slot_type}</strong></div>
+                  <div>Pozice: {Math.round(selectedSlot.slot.rel_x * 990)}x{Math.round(selectedSlot.slot.rel_y * 720)} pt</div>
+                  <div>Rozmer: {Math.round(selectedSlot.slot.rel_width * 990)}x{Math.round(selectedSlot.slot.rel_height * 720)} pt</div>
+                  {#if selectedSlot.slot.allow_bleed}
+                    <div class="text-green-600 font-medium">Bleed povolený</div>
+                  {/if}
+                </div>
+
+                {#if selectedSlot.image}
+                  <div class="mt-3">
+                    <div class="text-xs font-medium text-gray-700 mb-1">Prirazena fotka:</div>
+                    <img
+                      src={api.layoutThumbnailUrl(createdProjectId, selectedSlot.image.filename, 300)}
+                      alt={selectedSlot.image.filename}
+                      class="w-full rounded-lg border border-gray-200"
+                    />
+                    <div class="text-[10px] text-gray-500 mt-1">{selectedSlot.image.filename}</div>
+                    <div class="text-[10px] text-gray-400">
+                      {selectedSlot.image.width}x{selectedSlot.image.height}px &middot;
+                      {selectedSlot.image.orientation} &middot;
+                      {selectedSlot.image.priority}
+                    </div>
+                  </div>
+                {/if}
+              </div>
+
+            {:else if selectedSpreadIdx != null && planDetail.spreads[selectedSpreadIdx]}
+              <!-- Detail vybraného spreadu -->
+              {@const sel = planDetail.spreads[selectedSpreadIdx]}
+              <div class="space-y-3">
+                <h3 class="text-sm font-bold text-gray-800">
+                  Spread {selectedSpreadIdx + 1}: {sel.spread_type}
+                </h3>
+                <div class="text-xs space-y-1 text-gray-600">
+                  <div>Pattern: <strong class="text-gray-800">{sel.pattern_id}</strong></div>
+                  <div>Slotů: <strong>{sel.slots?.length || 0}</strong></div>
+                  <div>Fotek: <strong>{sel.assigned_images?.length || 0}</strong></div>
+                  {#if sel.notes}
+                    <div class="text-gray-500 italic">{sel.notes}</div>
+                  {/if}
+                </div>
+
+                <!-- Fotky spreadu — draggable -->
+                {#if sel.assigned_images?.length > 0}
+                  <div class="mt-3">
+                    <div class="text-xs font-medium text-gray-700 mb-2">Fotky ve spreadu:</div>
+                    <div class="grid grid-cols-2 gap-2">
+                      {#each sel.assigned_images as img}
+                        <!-- svelte-ignore a11y_no_static_element_interactions -->
+                        <div
+                          class="relative cursor-grab active:cursor-grabbing rounded-lg overflow-hidden border border-gray-200 hover:border-indigo-400 transition-colors"
+                          draggable="true"
+                          ondragstart={() => handleImageDragStart(img.filename)}
+                          ondragend={handleImageDragEnd}
+                        >
+                          <img
+                            src={api.layoutThumbnailUrl(createdProjectId, img.filename, 200)}
+                            alt={img.filename}
+                            class="w-full h-16 object-cover"
+                          />
+                          <div class="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-[9px] px-1 py-0.5 truncate">
+                            {img.filename}
+                          </div>
+                          {#if img.priority === 'hero'}
+                            <span class="absolute top-0.5 right-0.5 bg-yellow-400 text-yellow-900 text-[8px] font-bold px-1 rounded">H</span>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
+
+                <!-- Text sections -->
+                {#if sel.assigned_text_sections?.length > 0}
+                  <div class="mt-3">
+                    <div class="text-xs font-medium text-gray-700 mb-1">Text sekce:</div>
+                    <div class="flex flex-wrap gap-1">
+                      {#each sel.assigned_text_sections as ts}
+                        <span class="bg-blue-50 text-blue-700 text-[10px] px-1.5 py-0.5 rounded">{ts}</span>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
+              </div>
+
+            {:else}
+              <div class="text-center py-10 text-gray-400 text-xs">
+                <p>Vyber spread pro zobrazeni detailu</p>
+                <p class="mt-2 text-gray-300">Sipkami naviguj, kliknutim vyber slot</p>
+              </div>
+            {/if}
+          </div>
         </div>
 
-        <!-- Miniaturky spreadu -->
+      {:else if planResult}
+        <!-- Fallback: jednoduchá miniatura (když plan-detail selže) -->
         <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6">
           {#each planResult.spreads || [] as spread, idx}
             <div class="border border-gray-200 rounded-lg p-3 bg-gray-50">
               <div class="text-xs font-bold text-gray-700 mb-1">Spread {idx + 1}</div>
               <div class="text-xs text-gray-500 mb-2">{spread.spread_type || spread.pattern_id || '?'}</div>
-
-              <!-- Zjednodusena miniatura -->
-              <div class="relative bg-white border border-gray-300 rounded" style="aspect-ratio: 2/1.44;">
+              <div class="relative bg-white border border-gray-300 rounded" style="aspect-ratio: 990/720;">
                 {#each spread.slots || [] as slot, si}
-                  {@const l = slot.x != null ? (slot.x / 990 * 100) : (si * 25)}
-                  {@const t = slot.y != null ? (slot.y / 720 * 100) : 10}
-                  {@const w = slot.width != null ? (slot.width / 990 * 100) : 20}
-                  {@const h = slot.height != null ? (slot.height / 720 * 100) : 30}
+                  {@const l = slot.rel_x != null ? (slot.rel_x * 100) : (si * 25)}
+                  {@const t = slot.rel_y != null ? (slot.rel_y * 100) : 10}
+                  {@const w = slot.rel_width != null ? (slot.rel_width * 100) : 20}
+                  {@const h = slot.rel_height != null ? (slot.rel_height * 100) : 30}
                   <div
                     class="absolute rounded-sm text-[8px] flex items-center justify-center
-                           {slot.slot_type === 'image' || slot.frame_type === 'image'
+                           {slot.slot_type?.includes('image')
                              ? 'bg-green-200 border border-green-400 text-green-700'
                              : 'bg-blue-200 border border-blue-400 text-blue-700'}"
                     style="left:{l}%; top:{t}%; width:{w}%; height:{h}%;"
                   >
-                    {slot.slot_type?.[0]?.toUpperCase() || slot.frame_type?.[0]?.toUpperCase() || '?'}
+                    {slot.slot_type?.[0]?.toUpperCase() || '?'}
                   </div>
                 {/each}
               </div>
-
               {#if spread.assigned_images?.length}
                 <div class="text-[10px] text-gray-400 mt-1">{spread.assigned_images.length} fotek</div>
               {/if}
@@ -579,8 +887,14 @@ Text clanku..."
           &larr; Zpet
         </button>
         <button
+          class="px-4 py-2 text-gray-500 hover:text-gray-700 text-sm border border-gray-200 rounded-lg"
+          onclick={() => { step = 4; planResult = null; planDetail = null; }}
+        >
+          Preplanovot
+        </button>
+        <button
           class="flex-1 py-2.5 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50"
-          disabled={!planResult || generating}
+          disabled={!(planResult || planDetail) || generating}
           onclick={() => { step = 6; runGenerate(); }}
         >
           Generovat IDML &rarr;
@@ -619,7 +933,7 @@ Text clanku..."
       {/if}
 
       <div class="flex gap-3 mt-4">
-        <button class="px-4 py-2 text-gray-600 hover:text-gray-900 text-sm" onclick={() => { step = 5; }}>
+        <button class="px-4 py-2 text-gray-600 hover:text-gray-900 text-sm" onclick={() => { step = 5; loadPlanDetail(); }}>
           &larr; Zpet k planu
         </button>
         <button

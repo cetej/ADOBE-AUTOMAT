@@ -15,6 +15,10 @@ Endpointy:
 - GET  /api/layout/projects — seznam layout projektů
 - GET  /api/layout/projects/{project_id} — detail projektu
 - DELETE /api/layout/projects/{project_id} — smazání projektu
+- GET  /api/layout/thumbnail/{project_id}/{filename} — thumbnail fotky
+- POST /api/layout/update-plan/{project_id} — update layout plánu (reorder, swap)
+- GET  /api/layout/validate/{project_id} — validace projektu
+- GET  /api/layout/plan-detail/{project_id} — detail plánu se sloty a fotkama
 """
 
 import sys
@@ -589,4 +593,266 @@ def api_list_patterns():
             }
             for p in patterns
         ]
+    }
+
+
+# --- Session 7: Preview & Polish ---
+
+# Thumbnail cache dir
+_THUMB_DIR = LAYOUT_DIR / "_thumbnails"
+
+
+@router.get("/api/layout/thumbnail/{project_id}/{filename}")
+def api_thumbnail(project_id: str, filename: str, size: int = 200):
+    """Vrátí thumbnail fotky (Pillow, EXIF-aware, cached)."""
+    from PIL import Image, ExifTags
+
+    images_dir = _project_dir(project_id) / "images"
+    safe_name = "".join(c if c.isalnum() or c in ".-_" else "_" for c in filename)
+    src = images_dir / safe_name
+    if not src.exists():
+        raise HTTPException(404, f"Fotka neexistuje: {filename}")
+
+    # Cache
+    thumb_dir = _THUMB_DIR / project_id
+    thumb_dir.mkdir(parents=True, exist_ok=True)
+    thumb_path = thumb_dir / f"{safe_name}_{size}.jpg"
+
+    if not thumb_path.exists() or thumb_path.stat().st_mtime < src.stat().st_mtime:
+        with Image.open(src) as img:
+            # EXIF orientace
+            try:
+                img = _apply_exif_orientation(img)
+            except Exception:
+                pass
+            # Thumbnail — zachovává aspect ratio
+            img.thumbnail((size, size), Image.LANCZOS)
+            img = img.convert("RGB")
+            img.save(str(thumb_path), "JPEG", quality=80)
+
+    return FileResponse(thumb_path, media_type="image/jpeg")
+
+
+def _apply_exif_orientation(img):
+    """Aplikuje EXIF orientaci na Pillow Image."""
+    from PIL import ExifTags
+    try:
+        exif = img.getexif()
+        if not exif:
+            return img
+        orient_tag = None
+        for tag_id, tag_name in ExifTags.TAGS.items():
+            if tag_name == "Orientation":
+                orient_tag = tag_id
+                break
+        if orient_tag and orient_tag in exif:
+            orient = exif[orient_tag]
+            rotate_map = {3: 180, 6: 270, 8: 90}
+            if orient in rotate_map:
+                img = img.rotate(rotate_map[orient], expand=True)
+            elif orient in (2,):
+                img = img.transpose(Image.FLIP_LEFT_RIGHT)
+            elif orient in (4,):
+                img = img.transpose(Image.FLIP_TOP_BOTTOM)
+    except Exception:
+        pass
+    return img
+
+
+class PlanUpdateRequest(BaseModel):
+    """Update layout plánu — přesuny spreadů, přiřazení fotek."""
+    spread_order: Optional[list[int]] = None        # Nové pořadí indexů
+    swap_images: Optional[list[dict]] = None         # [{"from_spread": 0, "from_idx": 0, "to_spread": 1, "to_idx": 0}]
+    move_image_to_spread: Optional[dict] = None      # {"image": "file.jpg", "from_spread": 0, "to_spread": 1}
+
+
+@router.post("/api/layout/update-plan/{project_id}")
+def api_update_plan(project_id: str, req: PlanUpdateRequest):
+    """Update layout plánu — přeřadit spready, přehodit fotky."""
+    meta = _load_project_meta(project_id)
+    if not meta.get("plan"):
+        raise HTTPException(400, "Nejdřív spusť plánování")
+
+    from models_layout import LayoutPlan
+    plan = LayoutPlan(**meta["plan"])
+
+    # 1. Přeřazení spreadů
+    if req.spread_order:
+        if sorted(req.spread_order) != list(range(len(plan.spreads))):
+            raise HTTPException(400, "Neplatné pořadí spreadů")
+        new_spreads = [plan.spreads[i] for i in req.spread_order]
+        # Přečíslovat spread_index
+        for i, s in enumerate(new_spreads):
+            s.spread_index = i
+        plan.spreads = new_spreads
+
+    # 2. Swap fotek mezi spready
+    if req.swap_images:
+        for swap in req.swap_images:
+            si_from = swap.get("from_spread", 0)
+            idx_from = swap.get("from_idx", 0)
+            si_to = swap.get("to_spread", 0)
+            idx_to = swap.get("to_idx", 0)
+            s_from = plan.spreads[si_from]
+            s_to = plan.spreads[si_to]
+            if idx_from < len(s_from.assigned_images) and idx_to < len(s_to.assigned_images):
+                s_from.assigned_images[idx_from], s_to.assigned_images[idx_to] = (
+                    s_to.assigned_images[idx_to], s_from.assigned_images[idx_from]
+                )
+
+    # 3. Přesunutí fotky do jiného spreadu
+    if req.move_image_to_spread:
+        m = req.move_image_to_spread
+        img = m.get("image", "")
+        si_from = m.get("from_spread", 0)
+        si_to = m.get("to_spread", 0)
+        s_from = plan.spreads[si_from]
+        s_to = plan.spreads[si_to]
+        if img in s_from.assigned_images:
+            s_from.assigned_images.remove(img)
+            s_to.assigned_images.append(img)
+
+    # Uložit
+    plan_data = plan.model_dump()
+    plan_path = _project_dir(project_id) / "layout_plan.json"
+    plan_path.write_text(json.dumps(plan_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    meta["plan"] = plan_data
+    _save_project_meta(project_id, meta)
+
+    return {"status": "updated", "plan": plan_data}
+
+
+@router.get("/api/layout/validate/{project_id}")
+def api_validate_project(project_id: str):
+    """Validace projektu — kontrola fotek, textu, headline."""
+    meta = _load_project_meta(project_id)
+    warnings = []
+    errors = []
+
+    images = meta.get("images", [])
+    article = meta.get("article")
+    plan = meta.get("plan")
+
+    # Fotky
+    if not images:
+        errors.append({"code": "no_images", "message": "Žádné fotky nebyly nahrány"})
+    elif len(images) < 3:
+        warnings.append({"code": "few_images", "message": f"Pouze {len(images)} fotky — doporučujeme alespoň 3"})
+    elif len(images) > 30:
+        warnings.append({"code": "many_images", "message": f"{len(images)} fotek — některé nebudou použity"})
+
+    # Hero fotka
+    hero_count = sum(1 for img in images if img.get("priority") == "hero")
+    if hero_count == 0 and images:
+        warnings.append({"code": "no_hero", "message": "Žádná fotka nemá prioritu hero — bude vybrána automaticky"})
+
+    # Neplatné formáty (kontrola existujících souborů)
+    images_dir = _project_dir(project_id) / "images"
+    valid_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".webp", ".gif"}
+    if images_dir.exists():
+        for f in images_dir.iterdir():
+            if f.is_file() and f.suffix.lower() not in valid_exts:
+                warnings.append({"code": "invalid_format", "message": f"Neplatný formát: {f.name}"})
+
+    # Text
+    if not article:
+        if meta.get("phase") in ("text_uploaded", "planned", "generated"):
+            errors.append({"code": "no_text", "message": "Text článku chybí"})
+    else:
+        if not article.get("headline"):
+            warnings.append({"code": "no_headline", "message": "Článek nemá titulek (headline)"})
+        total_chars = article.get("total_chars", 0)
+        if total_chars < 200:
+            warnings.append({"code": "short_text", "message": f"Text je velmi krátký ({total_chars} znaků)"})
+        elif total_chars > 30000:
+            warnings.append({"code": "long_text", "message": f"Text je velmi dlouhý ({total_chars} znaků) — bude potřeba více stran"})
+
+    # Poměr fotek k plánovaným stránkám
+    if plan:
+        plan_images_needed = 0
+        for spread in plan.get("spreads", []):
+            plan_images_needed += len(spread.get("assigned_images", []))
+        if plan_images_needed > len(images):
+            warnings.append({
+                "code": "images_shortage",
+                "message": f"Plán potřebuje {plan_images_needed} fotek, ale máte jen {len(images)}"
+            })
+
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+@router.get("/api/layout/plan-detail/{project_id}")
+def api_plan_detail(project_id: str):
+    """Detail plánu se sloty z pattern library a thumbnail URLs."""
+    meta = _load_project_meta(project_id)
+    if not meta.get("plan"):
+        raise HTTPException(400, "Plán ještě neexistuje")
+
+    from models_layout import LayoutPlan
+    from services.layout.spread_patterns import get_pattern
+
+    plan = LayoutPlan(**meta["plan"])
+    images = meta.get("images", [])
+    # Mapa: filename → image info (i s full path jako klíč)
+    img_map = {}
+    for img in images:
+        fn = img.get("filename", "")
+        if fn:
+            img_map[fn] = img
+        p = img.get("path", "")
+        if p:
+            img_map[p] = img
+            img_map[Path(p).name] = img
+
+    spreads_detail = []
+    for spread in plan.spreads:
+        pattern = get_pattern(spread.pattern_id)
+        slots = []
+        if pattern:
+            for slot in pattern.slots:
+                slots.append({
+                    "slot_id": slot.slot_id,
+                    "slot_type": slot.slot_type.value if hasattr(slot.slot_type, 'value') else str(slot.slot_type),
+                    "rel_x": slot.rel_x,
+                    "rel_y": slot.rel_y,
+                    "rel_width": slot.rel_width,
+                    "rel_height": slot.rel_height,
+                    "required": slot.required,
+                    "allow_bleed": slot.allow_bleed,
+                })
+
+        # Image info s thumbnail URL — normalizuj na filename
+        assigned_images_detail = []
+        for img_ref in spread.assigned_images:
+            # assigned_images může obsahovat full path nebo jen filename
+            basename = Path(img_ref).name if img_ref else img_ref
+            info = img_map.get(img_ref, img_map.get(basename, {}))
+            assigned_images_detail.append({
+                "filename": basename,
+                "thumbnail_url": f"/api/layout/thumbnail/{project_id}/{basename}",
+                "orientation": info.get("orientation", "landscape"),
+                "priority": info.get("priority", "supporting"),
+                "width": info.get("width", 0),
+                "height": info.get("height", 0),
+            })
+
+        spreads_detail.append({
+            "spread_index": spread.spread_index,
+            "pattern_id": spread.pattern_id,
+            "spread_type": spread.spread_type.value if hasattr(spread.spread_type, 'value') else str(spread.spread_type),
+            "slots": slots,
+            "assigned_images": assigned_images_detail,
+            "assigned_text_sections": spread.assigned_text_sections,
+            "notes": spread.notes,
+        })
+
+    return {
+        "project_id": plan.project_id,
+        "style_profile": plan.style_profile,
+        "total_pages": plan.total_pages,
+        "spreads": spreads_detail,
     }
