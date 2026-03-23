@@ -209,4 +209,36 @@ export const api = {
   layoutUpdatePattern: (id, data) => request('PUT', `/layout/patterns/${id}`, data),
   layoutDeletePattern: (id) => request('DELETE', `/layout/patterns/${id}`),
   layoutValidatePattern: (data) => request('POST', '/layout/patterns/validate', data),
+
+  // Multi-Article (Session 10)
+  layoutMultiUploadArticles: async (projectId, { text, files }) => {
+    const fd = new FormData();
+    if (text) fd.append('text', text);
+    if (files) for (const f of files) fd.append('files', f);
+    const res = await fetch(`${BASE}/layout/multi/upload-articles/${projectId}`, {
+      method: 'POST', body: fd,
+    });
+    return res.json();
+  },
+  layoutMultiAllocateImages: (projectId, allocation) =>
+    request('POST', `/layout/multi/allocate-images/${projectId}`, { allocation }),
+  layoutMultiPlan: (projectId, opts = {}) =>
+    request('POST', `/layout/multi/plan/${projectId}`, opts),
+  layoutMultiPlanProgress: (projectId) =>
+    request('GET', `/layout/multi/plan/${projectId}/progress`),
+  layoutMultiGenerate: (projectId, opts = {}) =>
+    request('POST', `/layout/multi/generate/${projectId}`, opts),
+  layoutMultiGenerateProgress: (projectId) =>
+    request('GET', `/layout/multi/generate/${projectId}/progress`),
+
+  // Traces
+  tracesSummary: (since = null, until = null, module = null) => {
+    const params = new URLSearchParams();
+    if (since) params.set('since', since);
+    if (until) params.set('until', until);
+    if (module) params.set('module', module);
+    const qs = params.toString();
+    return request('GET', `/traces/summary${qs ? '?' + qs : ''}`);
+  },
+  tracesRecent: (limit = 50) => request('GET', `/traces/recent?limit=${limit}`),
 };

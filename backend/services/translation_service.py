@@ -365,7 +365,7 @@ def _translate_api_call(
     # Parsovat JSON z odpovedi — extrahuj JSON pole z odpovedi
     raw = result.content.strip()
     logger.info("API response: stop=%s, len=%d, tokens_out=%d",
-                response.stop_reason, len(raw), response.usage.output_tokens)
+                result.stop_reason, len(raw), result.output_tokens)
 
     # Najdi prvni [ a posledni ] — spolehlivejsi nez regex na code fences
     start = raw.find("[")
@@ -399,8 +399,8 @@ def _translate_api_call(
     logger.info(
         "Claude API: prelozeno %d textu (input_tokens=%d, output_tokens=%d)",
         len(results),
-        response.usage.input_tokens,
-        response.usage.output_tokens,
+        result.input_tokens,
+        result.output_tokens,
     )
 
     return results

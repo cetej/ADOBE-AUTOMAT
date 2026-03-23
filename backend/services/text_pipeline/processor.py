@@ -10,6 +10,9 @@ import os
 import re
 import json
 import logging
+import uuid
+import time
+from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, Dict
@@ -20,8 +23,8 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
 
-from core.engine import MODEL_OPUS, MODEL_SONNET, MODEL_HAIKU, get_engine
-from core.traces import TraceCollector, get_trace_store
+from core.engine import MODEL_OPUS, MODEL_SONNET, MODEL_HAIKU, get_engine, _estimate_cost
+from core.traces import Trace, TraceCollector, get_trace_store
 
 logger = logging.getLogger(__name__)
 
@@ -60,27 +63,43 @@ class ClaudeProcessor:
 
         self.model = model or self.DEFAULT_MODEL
 
-        # Engine abstrakce pro trace tracking
+        # Engine abstrakce — používáme client pro streaming, store pro trace
         self._engine = get_engine()
-        self._collector = TraceCollector(
-            self._engine, get_trace_store(),
-            module=self.__class__.__name__,
-        )
+        self._trace_store = get_trace_store()
+        self._trace_module = self.__class__.__name__
 
-        # Přímý klient pro streaming (engine.generate_stream to řeší, ale
-        # tady potřebujeme granulární kontrolu nad stream events)
-        if ANTHROPIC_AVAILABLE and self.api_key:
-            self.client = anthropic.Anthropic(
-                api_key=self.api_key,
-                timeout=600.0
-            )
-        else:
-            self.client = self._engine.client if hasattr(self._engine, 'client') else None
+        # Přímý klient pro streaming (potřebujeme granulární kontrolu nad
+        # stream events — text_stream, web_search blocks, thinking)
+        self.client = self._engine.client
 
         self._prompt_cache: Dict[str, str] = {}
 
     def is_available(self) -> bool:
         return self._engine.health()
+
+    def _record_trace(
+        self, input_tokens: int, output_tokens: int,
+        cache_read: int = 0, cache_write: int = 0,
+        latency: float = 0.0, success: bool = True, error: str = None,
+    ) -> None:
+        """Zaznamená trace do TraceStore."""
+        try:
+            self._trace_store.record(Trace(
+                trace_id=str(uuid.uuid4())[:12],
+                timestamp=datetime.utcnow().isoformat() + "Z",
+                module=self._trace_module,
+                model=self.model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_read_tokens=cache_read,
+                cache_creation_tokens=cache_write,
+                latency_seconds=latency,
+                cost_usd=_estimate_cost(self.model, input_tokens, output_tokens, cache_read, cache_write),
+                success=success,
+                error=error,
+            ))
+        except Exception as e:
+            logger.warning("Trace zápis selhal: %s", e)
 
     def load_project_prompt(self, project_dir: Path) -> str:
         """Načte prompt z projektové složky (MASTER > INSTRUCTION > README)."""
@@ -146,8 +165,7 @@ class ClaudeProcessor:
             user_message = f"{user_instruction}\n\n---\n\n{content}"
 
         try:
-            import time as _time
-            _t_start = _time.perf_counter()
+            _t_start = time.perf_counter()
 
             result_content = ""
             input_tokens = 0
@@ -235,28 +253,11 @@ class ClaudeProcessor:
 
             # Zaznamenat trace
             _elapsed = _time.perf_counter() - _t_start
-            from core.traces import Trace
-            from core.engine import _estimate_cost
-            import uuid as _uuid
-            from datetime import datetime as _dt
-
-            _cost = _estimate_cost(
-                self.model, input_tokens, output_tokens,
+            self._record_trace(
+                input_tokens, output_tokens,
                 cache_read or 0, cache_write or 0,
+                _elapsed, success=True,
             )
-            self._collector.store.record(Trace(
-                trace_id=str(_uuid.uuid4())[:12],
-                timestamp=_dt.utcnow().isoformat() + "Z",
-                module=self._collector.module,
-                model=self.model,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cache_read_tokens=cache_read or 0,
-                cache_creation_tokens=cache_write or 0,
-                latency_seconds=_elapsed,
-                cost_usd=_cost,
-                success=True,
-            ))
 
             return ProcessingResult(
                 success=True,
@@ -269,8 +270,10 @@ class ClaudeProcessor:
             )
 
         except anthropic.APIError as e:
+            self._record_trace(0, 0, latency=time.perf_counter() - _t_start, success=False, error=str(e))
             return ProcessingResult(success=False, content="", error=f"API chyba: {e}")
         except Exception as e:
+            self._record_trace(0, 0, latency=time.perf_counter() - _t_start, success=False, error=str(e))
             return ProcessingResult(success=False, content="", error=f"Neočekávaná chyba: {e}")
 
     def process_with_project(

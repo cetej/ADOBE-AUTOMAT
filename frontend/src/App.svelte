@@ -8,6 +8,7 @@
   import WriteBack from './pages/WriteBack.svelte';
   import LayoutWizard from './pages/LayoutWizard.svelte';
   import PatternEditor from './pages/PatternEditor.svelte';
+  import Traces from './pages/Traces.svelte';
   import { currentProject } from './stores/project.js';
   import { page as pageStore, pendingProjectId, queryParams, goHome as navGoHome, navigate } from './stores/router.js';
   import { api } from './lib/api.js';
@@ -58,6 +59,13 @@
       {/if}
     </div>
     <div class="flex items-center gap-3">
+      <button
+        class="text-xs px-3 py-1.5 rounded-full transition-colors
+               {currentPage === 'traces' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500 hover:text-gray-700'}"
+        onclick={() => navigate('traces')}
+      >
+        Traces
+      </button>
       <ConnectionBadge />
     </div>
   </header>
@@ -100,6 +108,8 @@
           initialStyle={currentQuery.style || 'ng_feature'}
         />
       {/key}
+    {:else if currentPage === 'traces'}
+      <Traces />
     {:else if currentPage === 'dashboard'}
       <Dashboard />
     {:else if currentPage === 'extractor'}
