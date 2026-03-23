@@ -231,6 +231,32 @@ export const api = {
   layoutMultiGenerateProgress: (projectId) =>
     request('GET', `/layout/multi/generate/${projectId}/progress`),
 
+  // Maps / Illustrator Integration (Session 11)
+  layoutDetectMaps: (projectId, threshold = 0.3) =>
+    request('POST', `/layout/detect-maps/${projectId}?threshold=${threshold}`),
+  layoutExportMapTemplate: async (projectId, { slot_id, width, height, label_text, bleed }) => {
+    const fd = new FormData();
+    fd.append('slot_id', slot_id || 'map_0');
+    fd.append('width', String(width || 400));
+    fd.append('height', String(height || 400));
+    fd.append('label_text', label_text || '');
+    fd.append('bleed', String(bleed || 8.5));
+    const res = await fetch(`${BASE}/layout/export-map-template/${projectId}`, {
+      method: 'POST', body: fd,
+    });
+    return res.json();
+  },
+  layoutImportEditedMap: async (projectId, slotId, file) => {
+    const fd = new FormData();
+    fd.append('slot_id', slotId);
+    fd.append('file', file);
+    const res = await fetch(`${BASE}/layout/import-edited-map/${projectId}`, {
+      method: 'POST', body: fd,
+    });
+    return res.json();
+  },
+  layoutListMaps: (projectId) => request('GET', `/layout/maps/${projectId}`),
+
   // Traces
   tracesSummary: (since = null, until = null, module = null) => {
     const params = new URLSearchParams();

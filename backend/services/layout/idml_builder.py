@@ -1065,6 +1065,7 @@ def build_from_plan(
     output_path: str | Path,
     text_sections: Optional[dict[str, str]] = None,
     image_paths: Optional[dict[str, list[str]]] = None,
+    maps_dir: Optional[Path] = None,
 ) -> Path:
     """Vytvoří IDML z kompletního layout plánu.
 
@@ -1074,6 +1075,9 @@ def build_from_plan(
         output_path: Kam uložit výstupní IDML.
         text_sections: Mapování section_id → text.
         image_paths: Mapování spread_index → [cesty k obrázkům].
+        maps_dir: Adresář s editovanými mapami (slot_id.ext).
+                  Pokud pro image slot existuje soubor v maps_dir, použije se
+                  místo originální fotky.
 
     Returns:
         Path k vytvořenému IDML.
@@ -1099,14 +1103,19 @@ def build_from_plan(
                 # Namapovat na příslušný slot
                 content_map[section_id] = text_sections[section_id]
 
-        # Sestavit image_map
+        # Sestavit image_map — s map override
         imgs = image_paths.get(str(planned_spread.spread_index), [])
         image_map = {}
         img_idx = 0
         for slot in pattern.slots:
-            if slot.slot_type in (FrameType.HERO_IMAGE, FrameType.BODY_IMAGE):
+            if slot.slot_type in (FrameType.HERO_IMAGE, FrameType.BODY_IMAGE, FrameType.MAP_ART):
                 if img_idx < len(imgs):
-                    image_map[slot.slot_id] = imgs[img_idx]
+                    img_path = imgs[img_idx]
+                    # Check maps_dir pro editovanou mapu
+                    if maps_dir and maps_dir.exists():
+                        from services.layout.illustrator_exporter import resolve_image_with_maps
+                        img_path = resolve_image_with_maps(img_path, slot.slot_id, maps_dir)
+                    image_map[slot.slot_id] = img_path
                     img_idx += 1
 
         page_num = planned_spread.spread_index * 2 + 1

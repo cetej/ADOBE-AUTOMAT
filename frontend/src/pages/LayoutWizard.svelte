@@ -69,6 +69,13 @@
   let matchingCaptions = $state(false);
   let captionMatches = $state(null);
 
+  // Session 11: Maps / Illustrator Integration
+  let detectedMaps = $state([]);
+  let detectingMaps = $state(false);
+  let exportingMap = $state(false);
+  let importingMap = $state(false);
+  let mapPanelOpen = $state(false);
+
   // Session 10: Multi-Article
   let multiArticleMode = $state(false);
   let articleFiles = $state([]);         // File[] pro multi-article upload
@@ -665,6 +672,77 @@
     }
   }
 
+  // === Session 11: Map detection & Illustrator workflow ===
+
+  async function detectMaps() {
+    if (!createdProjectId) return;
+    detectingMaps = true;
+    try {
+      const res = await api.layoutDetectMaps(createdProjectId);
+      detectedMaps = res.maps || [];
+      if (detectedMaps.length > 0) {
+        mapPanelOpen = true;
+        notify(`${detectedMaps.length} map/infografik detekováno`, 'success');
+      } else {
+        notify('Žádné mapy nenalezeny', 'info');
+      }
+    } catch (e) {
+      notify('Chyba detekce map: ' + e.message, 'error');
+    } finally {
+      detectingMaps = false;
+    }
+  }
+
+  async function exportMapTemplate(map) {
+    if (!createdProjectId) return;
+    exportingMap = true;
+    try {
+      const res = await api.layoutExportMapTemplate(createdProjectId, {
+        slot_id: map.filename?.replace(/\.[^.]+$/, '') || 'map_0',
+        width: map.width ? Math.min(map.width * 0.72, 600) : 400,
+        height: map.height ? Math.min(map.height * 0.72, 600) : 400,
+        label_text: '',
+        bleed: 8.5,
+      });
+      if (res.status === 'ok') {
+        notify(res.message, 'success');
+      } else {
+        notify(res.detail || 'Chyba exportu', 'error');
+      }
+    } catch (e) {
+      notify('Illustrator nepřipojený: ' + e.message, 'error');
+    } finally {
+      exportingMap = false;
+    }
+  }
+
+  async function importEditedMap(slotId) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.png,.jpg,.jpeg,.tif,.tiff,.pdf';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      importingMap = true;
+      try {
+        const res = await api.layoutImportEditedMap(createdProjectId, slotId, file);
+        if (res.status === 'ok') {
+          notify(res.message, 'success');
+          // Refresh maps
+          const mapsRes = await api.layoutListMaps(createdProjectId);
+          detectedMaps = mapsRes.maps || [];
+        } else {
+          notify(res.detail || 'Chyba importu', 'error');
+        }
+      } catch (e) {
+        notify('Chyba importu mapy: ' + e.message, 'error');
+      } finally {
+        importingMap = false;
+      }
+    };
+    input.click();
+  }
+
   // Keyboard shortcuts
   function handleKeydown(e) {
     // Escape = zpet
@@ -1223,6 +1301,30 @@ Text druheho clanku..."
           </button>
         {/if}
 
+        <!-- Map Detection (Session 11) -->
+        <button
+          class="px-3 py-1.5 text-xs border rounded-lg transition-colors
+                 {detectingMaps ? 'border-gray-300 text-gray-400' : 'border-gray-200 text-gray-600 hover:border-amber-400 hover:text-amber-600'}"
+          disabled={detectingMaps}
+          onclick={detectMaps}
+        >
+          {#if detectingMaps}
+            <span class="animate-spin inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full mr-1"></span>
+            Hledam mapy...
+          {:else}
+            Detekovat mapy
+          {/if}
+        </button>
+        {#if detectedMaps.length > 0}
+          <button
+            class="px-3 py-1.5 text-xs border rounded-lg transition-colors
+                   {mapPanelOpen ? 'bg-amber-100 text-amber-700 border-amber-300' : 'border-amber-200 text-amber-600 hover:bg-amber-50'}"
+            onclick={() => { mapPanelOpen = !mapPanelOpen; }}
+          >
+            Mapy ({detectedMaps.length})
+          </button>
+        {/if}
+
         <!-- Batch variant tabs -->
         {#if batchMode && batchPlans}
           <div class="flex-1"></div>
@@ -1253,6 +1355,55 @@ Text druheho clanku..."
                   <span class="text-gray-400 whitespace-nowrap">{match.method === 'ai' ? `(AI ${Math.round(match.confidence * 100)}%)` : '(poradi)'}</span>
                 </div>
               {/if}
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      <!-- Map Panel (Session 11) -->
+      {#if mapPanelOpen && detectedMaps.length > 0}
+        <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+          <div class="flex items-center justify-between mb-2">
+            <div class="text-xs font-medium text-amber-800">Detekovane mapy/infografiky ({detectedMaps.length})</div>
+            <button class="text-gray-400 hover:text-gray-600 text-xs" onclick={() => { mapPanelOpen = false; }}>Zavrit</button>
+          </div>
+          <div class="space-y-2 max-h-48 overflow-y-auto">
+            {#each detectedMaps as map, mi}
+              <div class="flex items-center gap-3 p-2 bg-white rounded border border-amber-100">
+                <div class="w-12 h-12 bg-amber-100 rounded flex items-center justify-center text-amber-600 text-lg font-bold flex-shrink-0">
+                  {map.map_type === 'map' ? 'M' : map.map_type === 'infographic' ? 'I' : 'D'}
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-xs font-medium text-gray-800 truncate">{map.filename}</div>
+                  <div class="text-[10px] text-gray-500">
+                    {map.map_type} &middot; {Math.round(map.confidence * 100)}% &middot;
+                    {map.width}&times;{map.height}px
+                  </div>
+                  {#if map.reasons?.length}
+                    <div class="text-[9px] text-amber-600 truncate">{map.reasons.join(', ')}</div>
+                  {/if}
+                </div>
+                <div class="flex flex-col gap-1 flex-shrink-0">
+                  {#if map.status === 'edited'}
+                    <span class="px-2 py-0.5 bg-green-100 text-green-700 text-[10px] rounded">Editovano</span>
+                  {:else}
+                    <button
+                      class="px-2 py-1 text-[10px] bg-amber-100 text-amber-700 rounded hover:bg-amber-200 transition-colors disabled:opacity-50"
+                      disabled={exportingMap}
+                      onclick={() => exportMapTemplate(map)}
+                    >
+                      {exportingMap ? '...' : 'Do Illustratoru'}
+                    </button>
+                  {/if}
+                  <button
+                    class="px-2 py-1 text-[10px] bg-gray-100 text-gray-600 rounded hover:bg-gray-200 transition-colors disabled:opacity-50"
+                    disabled={importingMap}
+                    onclick={() => importEditedMap(map.filename?.replace(/\.[^.]+$/, '') || `map_${mi}`)}
+                  >
+                    {importingMap ? '...' : 'Import mapy'}
+                  </button>
+                </div>
+              </div>
             {/each}
           </div>
         </div>

@@ -4,6 +4,29 @@ Poučení z vývoje. Nejnovější záznamy nahoře.
 
 ---
 
+## 2026-03-23 — Session 11: Illustrator Integration (Mapy v layoutu)
+
+**Vytvořeno:**
+- `backend/services/layout/map_detector.py` — heuristická detekce map/infografik (filename keywords, aspect ratio, caption keywords, content_hint)
+- `backend/services/layout/illustrator_exporter.py` — export AI šablony + import editovaných map + resolve helper
+- `backend/extendscripts/create_map_template.jsx` — ExtendScript pro vytvoření nového AI dokumentu s crop marks a label vrstvou
+- `models_layout.py` → přidán `MapInfo` Pydantic model
+- 4 nové API endpointy v `routers/layout.py`: detect-maps, export-map-template, import-edited-map, maps list
+
+**Integrace:**
+- `idml_builder.build_from_plan()` — nový parametr `maps_dir`, při generování IDML se kontroluje, zda pro slot existuje editovaná mapa
+- `resolve_image_with_maps()` — helper pro rozhodnutí mapa vs. originální obrázek
+- Frontend: state variables pro mapy + `detectMaps()`, `exportMapTemplate()`, `importEditedMap()` funkce
+- Step 5 toolbar: tlačítko "Detekovat mapy" + MapPanel s per-map akcemi
+
+**Klíčová rozhodnutí:**
+- MapCandidate je Python class (ne Pydantic) — confidence se počítá v paměti, serializuje se přes `to_dict()`
+- ExtendScript cesta: `parent.parent.parent / "extendscripts"` (3 úrovně: layout/ → services/ → backend/)
+- Graceful degradation: pokud Illustrator nepřipojený, API vrátí HTTP 503, frontend zobrazí chybu — mapy se použijí jako běžné obrázky
+- Editované mapy se ukládají do `data/layout_projects/{id}/maps/{slot_id}.{ext}` — slot_id je klíč pro resolve
+
+---
+
 ## 2026-03-23 — OpenJarvis Adopce: Engine + Registry + Traces
 
 **Inspirace:** Stanford OpenJarvis (open-jarvis/OpenJarvis) — local-first AI framework.

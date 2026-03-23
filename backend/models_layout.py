@@ -279,6 +279,20 @@ class MultiArticlePlan(BaseModel):
     article_boundaries: list[dict] = []  # [{article_id, start_page, end_page}]
 
 
+class MapInfo(BaseModel):
+    """Info o detekované nebo editované mapě v layout projektu."""
+    slot_id: str = ""
+    filename: str = ""
+    path: str = ""
+    confidence: float = 0.0
+    map_type: str = "map"        # "map" | "infographic" | "diagram"
+    reasons: list[str] = []
+    status: str = "detected"     # "detected" | "exporting" | "editing" | "edited"
+    width: int = 0
+    height: int = 0
+    aspect_ratio: float = 1.0
+
+
 class TextEstimate(BaseModel):
     """Odhad prostorových nároků textu v layoutu."""
     total_body_chars: int = 0

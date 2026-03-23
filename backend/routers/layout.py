@@ -39,6 +39,12 @@ Session 9 endpointy:
 - PUT  /api/layout/patterns/{pattern_id} — update custom patternu
 - DELETE /api/layout/patterns/{pattern_id} — smazání custom patternu
 - POST /api/layout/patterns/validate — validace patternu bez uložení
+
+Session 11 endpointy:
+- POST /api/layout/detect-maps/{project_id} — detekce map ve fotkách
+- POST /api/layout/export-map-template/{project_id} — export šablony do Illustratoru
+- POST /api/layout/import-edited-map/{project_id} — upload editované mapy
+- GET  /api/layout/maps/{project_id} — seznam map (detekovaných + editovaných)
 """
 
 import sys
@@ -476,12 +482,14 @@ def api_generate_idml(project_id: str, req: GenerateRequest = GenerateRequest())
             progress["message"] = f"Generuji IDML ({len(plan.spreads)} spreadů)..."
 
             output_path = _project_dir(project_id) / f"{project_id}.idml"
+            project_maps_dir = _project_dir(project_id) / "maps"
             result_path = build_from_plan(
                 layout_plan=plan,
                 skeleton_idml=skeleton_str,
                 output_path=str(output_path),
                 text_sections=text_sections,
                 image_paths=image_paths,
+                maps_dir=project_maps_dir if project_maps_dir.exists() else None,
             )
 
             # Kopie do exports
@@ -1158,12 +1166,14 @@ def api_batch_generate(project_id: str, req: BatchGenerateRequest = BatchGenerat
                             image_paths[str(spread.spread_index)] = spread_imgs
 
                 output_path = variants_dir / f"variant_{vi}.idml"
+                batch_maps_dir = _project_dir(project_id) / "maps"
                 result_path = build_from_plan(
                     layout_plan=plan,
                     skeleton_idml=skeleton_str,
                     output_path=str(output_path),
                     text_sections=text_sections,
                     image_paths=image_paths,
+                    maps_dir=batch_maps_dir if batch_maps_dir.exists() else None,
                 )
 
                 results.append({
@@ -1740,3 +1750,182 @@ def api_multi_generate_progress(project_id: str):
     if progress["status"] in ("done", "error"):
         resp["result"] = progress.get("result")
     return resp
+
+
+# =====================================================================
+# Session 11: Illustrator Integration — Map detection & editing
+# =====================================================================
+
+@router.post("/api/layout/detect-maps/{project_id}")
+def api_detect_maps(project_id: str, threshold: float = 0.3):
+    """Detekuje mapy/infografiky ve fotkách projektu."""
+    meta = _load_project_meta(project_id)
+    proj_dir = _project_dir(project_id)
+    images_dir = proj_dir / "images"
+
+    if not images_dir.exists() or not meta.get("images"):
+        return {"maps": [], "message": "Žádné obrázky v projektu"}
+
+    from models_layout import ImageInfo
+    from services.layout.map_detector import detect_maps
+
+    # Načíst ImageInfo z meta nebo z plan_detail
+    image_infos = []
+    if meta.get("plan"):
+        # Zkusit z plánu — tam jsou assigned_image_infos
+        for spread in meta["plan"].get("spreads", []):
+            for img_info in spread.get("assigned_image_infos", []):
+                image_infos.append(ImageInfo(**img_info))
+
+    # Fallback — vytvořit ImageInfo z filesystému
+    if not image_infos:
+        from services.layout.image_analyzer import analyze_image
+        for img_file in sorted(images_dir.iterdir()):
+            if img_file.suffix.lower() in {".jpg", ".jpeg", ".png", ".tif", ".tiff"}:
+                try:
+                    info = analyze_image(str(img_file))
+                    image_infos.append(info)
+                except Exception:
+                    image_infos.append(ImageInfo(
+                        path=str(img_file),
+                        filename=img_file.name,
+                    ))
+
+    # Captions z textu
+    captions = []
+    if meta.get("article") and meta["article"].get("captions"):
+        captions = meta["article"]["captions"]
+
+    candidates = detect_maps(image_infos, captions, threshold=threshold)
+
+    # Uložit do meta
+    maps_data = [c.to_dict() for c in candidates]
+    meta["detected_maps"] = maps_data
+    _save_project_meta(project_id, meta)
+
+    return {"maps": maps_data, "count": len(candidates)}
+
+
+@router.post("/api/layout/export-map-template/{project_id}")
+async def api_export_map_template(
+    project_id: str,
+    slot_id: str = Form("map_0"),
+    width: float = Form(400),
+    height: float = Form(400),
+    label_text: str = Form(""),
+    bleed: float = Form(8.5),
+):
+    """Export šablony mapy do Illustratoru."""
+    meta = _load_project_meta(project_id)
+    proj_dir = _project_dir(project_id)
+
+    from models_layout import Bounds
+    from services.layout.illustrator_exporter import check_illustrator, export_map_template
+    from services.layout.style_profiles import get_profile
+
+    # Zkontrolovat Illustrator
+    conn = await check_illustrator()
+    if not conn.get("connected"):
+        raise HTTPException(503, "Illustrator není připojený. Spusťte Illustrator s CEP pluginem.")
+
+    slot_bounds = Bounds(x=0, y=0, width=width, height=height)
+    output_dir = proj_dir / "maps"
+
+    # Style profile
+    profile = None
+    if meta.get("style_profile"):
+        profile = get_profile(meta["style_profile"])
+
+    try:
+        ai_path = export_map_template(
+            slot_bounds=slot_bounds,
+            output_dir=output_dir,
+            slot_id=slot_id,
+            style_profile=profile,
+            label_text=label_text,
+            bleed=bleed,
+        )
+        return {
+            "status": "ok",
+            "path": str(ai_path),
+            "slot_id": slot_id,
+            "message": f"Šablona vytvořena v Illustratoru ({width:.0f}×{height:.0f} pt)",
+        }
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+
+
+@router.post("/api/layout/import-edited-map/{project_id}")
+async def api_import_edited_map(
+    project_id: str,
+    slot_id: str = Form("map_0"),
+    file: UploadFile = File(...),
+):
+    """Upload editované mapy do projektu."""
+    meta = _load_project_meta(project_id)
+    proj_dir = _project_dir(project_id)
+
+    from services.layout.illustrator_exporter import import_edited_map
+
+    # Uložit upload do temp souboru
+    import tempfile
+    suffix = Path(file.filename).suffix if file.filename else ".png"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        content = await file.read()
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
+    try:
+        dest_path = import_edited_map(
+            source_path=tmp_path,
+            project_dir=proj_dir,
+            slot_id=slot_id,
+        )
+
+        # Aktualizovat meta — přidat/updatovat maps info
+        if "maps" not in meta:
+            meta["maps"] = {}
+        meta["maps"][slot_id] = {
+            "filename": dest_path.name,
+            "path": str(dest_path),
+            "status": "edited",
+            "size_bytes": dest_path.stat().st_size,
+        }
+        _save_project_meta(project_id, meta)
+
+        return {
+            "status": "ok",
+            "slot_id": slot_id,
+            "filename": dest_path.name,
+            "size_kb": round(dest_path.stat().st_size / 1024, 1),
+            "message": f"Mapa importována pro slot {slot_id}",
+        }
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@router.get("/api/layout/maps/{project_id}")
+def api_list_maps(project_id: str):
+    """Seznam map v projektu (detekované + editované)."""
+    meta = _load_project_meta(project_id)
+    proj_dir = _project_dir(project_id)
+
+    from services.layout.illustrator_exporter import get_project_maps
+
+    # Editované mapy z filesystému
+    edited_maps = get_project_maps(proj_dir)
+
+    # Detekované mapy z meta
+    detected_maps = meta.get("detected_maps", [])
+
+    # Merge: editované přepíšou detekované pro stejný slot_id
+    edited_slots = {m["slot_id"] for m in edited_maps}
+    result = list(edited_maps)
+    for dm in detected_maps:
+        slot_id = dm.get("filename", "").rsplit(".", 1)[0] or dm.get("slot_id", "")
+        if slot_id not in edited_slots:
+            result.append({**dm, "status": "detected"})
+
+    return {"maps": result, "count": len(result)}
