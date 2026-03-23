@@ -441,23 +441,46 @@ def api_generate_idml(project_id: str, req: GenerateRequest = GenerateRequest())
             progress["message"] = "Sestavuji text sekce..."
 
             # Sestavit text_sections mapování
+            # Klíče MUSÍ odpovídat tomu, co planner přiřazuje v
+            # assigned_text_sections (body_{spread_idx}, caption_{j}, pull_quote_{i})
             text_sections = {}
-            # Headline, deck, byline
+            # Headline, deck, byline — 1:1 s pattern slot IDs
             if article.headline:
                 text_sections["headline"] = article.headline
             if article.deck:
                 text_sections["deck"] = article.deck
             if article.byline:
                 text_sections["byline"] = article.byline
-            # Body paragraphs
-            for i, para in enumerate(article.body_paragraphs):
-                text_sections[f"body_{i}"] = para
-            # Captions
+            # Body paragraphs — planner přiřazuje "body_{spread_idx}" per spread,
+            # kde spread dostane chunk odstavců. Spojíme odstavce dle planner chunků.
+            # Planner dělí body_paragraphs do spread chunků přes _split_text_to_spreads,
+            # ale router to nevidí. Místo toho uložíme CELÝ body text pod každý
+            # body_{i} klíč, protože build_from_plan to pak namapuje na slot "body_text".
+            # Správně: rozdělíme odstavce stejně jako planner.
+            body_spread_count = max(1, len([
+                s for s in plan.spreads
+                if s.spread_type not in ("opening", "closing", "cover")
+            ]))
+            from services.layout.layout_planner import _split_text_to_spreads
+            body_chunks = _split_text_to_spreads(
+                article.body_paragraphs, body_spread_count
+            )
+            for i, chunk in enumerate(body_chunks):
+                if chunk:
+                    text_sections[f"body_{i}"] = "\n".join(chunk)
+            # Captions — planner přiřazuje "caption_{j}" kde j=0,1,...
             for i, cap in enumerate(article.captions):
                 text_sections[f"caption_{i}"] = cap
-            # Pull quotes
+            # Pull quotes — planner přiřazuje "pull_quote_{i}" (s podtržítkem!)
             for i, pq in enumerate(article.pull_quotes):
-                text_sections[f"pullquote_{i}"] = pq
+                text_sections[f"pull_quote_{i}"] = pq
+            # Closing spread sekce
+            if article.body_paragraphs:
+                # closing_text = poslední odstavec nebo shrnutí
+                text_sections["closing_text"] = article.body_paragraphs[-1] if article.body_paragraphs else ""
+            if article.byline:
+                text_sections["bio"] = article.byline
+            text_sections["credits"] = "National Geographic Česko"
 
             # Image paths per spread
             image_paths = {}
@@ -894,16 +917,30 @@ def api_validate_project(project_id: str):
 
 
 @router.get("/api/layout/plan-detail/{project_id}")
-def api_plan_detail(project_id: str):
-    """Detail plánu se sloty z pattern library a thumbnail URLs."""
+def api_plan_detail(project_id: str, variant: Optional[int] = None):
+    """Detail plánu se sloty z pattern library a thumbnail URLs.
+
+    Args:
+        variant: Číslo varianty (1, 2, 3...). Pokud None, vrátí hlavní plán.
+    """
     meta = _load_project_meta(project_id)
-    if not meta.get("plan"):
-        raise HTTPException(400, "Plán ještě neexistuje")
+
+    plan_data = None
+    if variant is not None and variant >= 1:
+        # Načíst variantu z variants/plan_v{variant}.json
+        variant_path = _project_dir(project_id) / "variants" / f"plan_v{variant}.json"
+        if variant_path.exists():
+            plan_data = json.loads(variant_path.read_text(encoding="utf-8"))
+
+    if plan_data is None:
+        if not meta.get("plan"):
+            raise HTTPException(400, "Plán ještě neexistuje")
+        plan_data = meta["plan"]
 
     from models_layout import LayoutPlan
     from services.layout.spread_patterns import get_pattern
 
-    plan = LayoutPlan(**meta["plan"])
+    plan = LayoutPlan(**plan_data)
     images = meta.get("images", [])
     # Mapa: filename → image info (i s full path jako klíč)
     img_map = {}
@@ -1130,20 +1167,7 @@ def api_batch_generate(project_id: str, req: BatchGenerateRequest = BatchGenerat
             from services.layout.idml_builder import build_from_plan
 
             article = ArticleText(**meta["article"])
-
-            text_sections = {}
-            if article.headline:
-                text_sections["headline"] = article.headline
-            if article.deck:
-                text_sections["deck"] = article.deck
-            if article.byline:
-                text_sections["byline"] = article.byline
-            for i, para in enumerate(article.body_paragraphs):
-                text_sections[f"body_{i}"] = para
-            for i, cap in enumerate(article.captions):
-                text_sections[f"caption_{i}"] = cap
-            for i, pq in enumerate(article.pull_quotes):
-                text_sections[f"pullquote_{i}"] = pq
+            from services.layout.layout_planner import _split_text_to_spreads
 
             images_dir = d / "images"
 
@@ -1153,6 +1177,34 @@ def api_batch_generate(project_id: str, req: BatchGenerateRequest = BatchGenerat
 
                 plan_data = json.loads(pf.read_text(encoding="utf-8"))
                 plan = LayoutPlan(**plan_data)
+
+                # Sestavit text_sections per varianta (počet body spreadů se může lišit)
+                text_sections = {}
+                if article.headline:
+                    text_sections["headline"] = article.headline
+                if article.deck:
+                    text_sections["deck"] = article.deck
+                if article.byline:
+                    text_sections["byline"] = article.byline
+                body_spread_count = max(1, len([
+                    s for s in plan.spreads
+                    if s.spread_type not in ("opening", "closing", "cover")
+                ]))
+                body_chunks = _split_text_to_spreads(
+                    article.body_paragraphs, body_spread_count
+                )
+                for i, chunk in enumerate(body_chunks):
+                    if chunk:
+                        text_sections[f"body_{i}"] = "\n".join(chunk)
+                for i, cap in enumerate(article.captions):
+                    text_sections[f"caption_{i}"] = cap
+                for i, pq in enumerate(article.pull_quotes):
+                    text_sections[f"pull_quote_{i}"] = pq
+                if article.body_paragraphs:
+                    text_sections["closing_text"] = article.body_paragraphs[-1]
+                if article.byline:
+                    text_sections["bio"] = article.byline
+                text_sections["credits"] = "National Geographic Česko"
 
                 image_paths = {}
                 for spread in plan.spreads:

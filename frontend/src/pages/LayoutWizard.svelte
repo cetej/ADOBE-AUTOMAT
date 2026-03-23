@@ -149,10 +149,10 @@
   }
 
   // === Plan detail (Session 7) ===
-  async function loadPlanDetail() {
+  async function loadPlanDetail(variant = null) {
     if (!createdProjectId) return;
     try {
-      planDetail = await api.layoutPlanDetail(createdProjectId);
+      planDetail = await api.layoutPlanDetail(createdProjectId, variant);
     } catch (e) {
       // Fallback — zůstaneme u planResult
       planDetail = null;
@@ -575,10 +575,10 @@
         variant_count: 3,
       });
       batchPlans = result;
-      // Načíst detail prvního plánu (uložen jako hlavní)
+      batchVariantIdx = 0;
       planResult = result.plans?.[0];
       step = 5;
-      loadPlanDetail();
+      loadPlanDetail(1);  // Načíst detail první varianty
       runValidation();
       notify(`${result.variants} varianty naplanovany`, 'success');
     } catch (e) {
@@ -1333,7 +1333,7 @@ Text druheho clanku..."
               <button
                 class="px-3 py-1.5 text-xs rounded-lg transition-colors
                        {batchVariantIdx === vi ? 'bg-purple-100 text-purple-700 border border-purple-300' : 'border border-gray-200 text-gray-500 hover:border-purple-300'}"
-                onclick={() => { batchVariantIdx = vi; }}
+                onclick={() => { batchVariantIdx = vi; loadPlanDetail(vi + 1); }}
               >
                 V{vi + 1}
               </button>

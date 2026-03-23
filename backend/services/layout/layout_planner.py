@@ -295,9 +295,13 @@ def _select_body_pattern(
     num_images = len(images)
     text_chars = sum(len(p) for p in text_chunks)
 
-    # Hodně fotek → photo grid
-    if num_images >= 3:
+    # Hodně fotek → photo grid (ale jen pokud není moc textu — grid nemá body_text slot)
+    if num_images >= 3 and text_chars < 300:
         return "photo_grid_3x2"
+
+    # Hodně fotek + text → mixed layout (má body_text + 2 image sloty)
+    if num_images >= 2 and text_chars >= 300:
+        return "body_mixed_top_photo"
 
     # Jedna velká fotka, málo textu → photo dominant
     if (num_images == 1

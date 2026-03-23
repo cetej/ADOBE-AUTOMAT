@@ -4,6 +4,28 @@ Poučení z vývoje. Nejnovější záznamy nahoře.
 
 ---
 
+## 2026-03-23 — Kritický bugfix: Layout Generator text mapping
+
+**Problém:** Text se do generovaného IDML nedostával. Headline a deck fungovaly, ale body text, captions, pull quotes, bio, credits — vše bylo prázdné.
+
+**Příčina:** Systémový nesoulad klíčů mezi 3 vrstvami:
+- **Router** ukládal `pullquote_0` (bez podtržítka), planner přiřazoval `pull_quote_0` (s podtržítkem)
+- **Planner** přiřazoval body text jako `body_0`, `body_1`, ale pattern sloty se jmenují `body_text`
+- **Closing spread**: planner přiřazoval `closing_text`, `bio`, `credits` — pattern má `body_text`, `sidebar`, `credit`
+- **Captions**: planner `caption_0` vs. pattern `caption_1`, `caption_row1` — indexy nesedí
+
+**Řešení (3 soubory):**
+1. `routers/layout.py` — router nyní spojuje body odstavce per spread (ne individuálně), pullquotes s `pull_quote_` (podtržítko), přidává closing_text/bio/credits
+2. `idml_builder.py` (`build_from_plan` + multi-article verze) — nová mapping vrstva: section_id → slot_id s fallbacky (body→body_text|sidebar, caption sekvenčně do caption slotů, bio→sidebar, credits→credit)
+3. `layout_planner.py` — `_select_body_pattern` — photo_grid jen pro ≤300 znaků textu (grid nemá body_text slot)
+
+**Poučení:**
+- Při designu pipeline s named slots: **definovat ID konvenci jednou** a sdílet mezi vrstvami
+- Caption/body/pullquote indexy z planneru se NESMÍ matchovat přes přímý slot lookup (caption_1 z planneru ≠ caption_1 slot v patternu)
+- Vždy E2E testovat s reálným textem a ověřovat obsah ZIP výstupu
+
+---
+
 ## 2026-03-23 — Session 11: Illustrator Integration (Mapy v layoutu)
 
 **Vytvořeno:**

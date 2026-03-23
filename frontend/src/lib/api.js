@@ -167,7 +167,7 @@ export const api = {
   // Session 7: Preview & Polish
   layoutThumbnailUrl: (projectId, filename, size = 200) =>
     `${BASE}/layout/thumbnail/${projectId}/${encodeURIComponent(filename)}?size=${size}`,
-  layoutPlanDetail: (projectId) => request('GET', `/layout/plan-detail/${projectId}`),
+  layoutPlanDetail: (projectId, variant) => request('GET', `/layout/plan-detail/${projectId}${variant != null ? `?variant=${variant}` : ''}`),
   layoutUpdatePlan: (projectId, updates) => request('POST', `/layout/update-plan/${projectId}`, updates),
   layoutValidate: (projectId) => request('GET', `/layout/validate/${projectId}`),
 

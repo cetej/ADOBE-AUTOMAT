@@ -1097,11 +1097,62 @@ def build_from_plan(
             raise ValueError(f"Pattern not found: {planned_spread.pattern_id}")
 
         # Sestavit content_map z přiřazených text sekcí
+        # MAPOVÁNÍ: planner section IDs → pattern slot IDs
+        # Planner přiřazuje: body_{i}, caption_{j}, pull_quote_{i}, closing_text, bio, credits
+        # Patterny mají sloty: body_text, caption/caption_1/caption_2, sidebar, credit, ...
         content_map = {}
+        pattern_slot_ids = {slot.slot_id for slot in pattern.slots}
+        caption_slot_idx = 0  # pro iteraci přes caption sloty v patternu
+        caption_slots = [s.slot_id for s in pattern.slots
+                         if s.slot_id.startswith("caption")]
+
         for section_id in planned_spread.assigned_text_sections:
-            if section_id in text_sections:
-                # Namapovat na příslušný slot
-                content_map[section_id] = text_sections[section_id]
+            if section_id not in text_sections:
+                continue
+            text_val = text_sections[section_id]
+
+            # Přímý match (headline, deck, byline, folio — NE body/caption/pull_quote,
+            # ty vždy mapovat sekvenčně)
+            if (section_id in pattern_slot_ids
+                    and not section_id.startswith("body_")
+                    and not section_id.startswith("caption_")
+                    and not section_id.startswith("pull_quote_")):
+                content_map[section_id] = text_val
+            # body_{i} → slot "body_text", fallback na "sidebar"
+            elif section_id.startswith("body_"):
+                target = "body_text" if "body_text" in pattern_slot_ids else (
+                    "sidebar" if "sidebar" in pattern_slot_ids else None)
+                if target:
+                    if target in content_map:
+                        content_map[target] += "\n" + text_val
+                    else:
+                        content_map[target] = text_val
+            # caption_{j} → první volný caption slot v patternu
+            elif section_id.startswith("caption_"):
+                if caption_slot_idx < len(caption_slots):
+                    content_map[caption_slots[caption_slot_idx]] = text_val
+                    caption_slot_idx += 1
+                elif "caption" in pattern_slot_ids:
+                    # Fallback: jednoduchý "caption" slot
+                    content_map["caption"] = text_val
+            # pull_quote_{i} → slot "pull_quote" (pokud existuje v patternu)
+            elif section_id.startswith("pull_quote_"):
+                if "pull_quote" in pattern_slot_ids:
+                    content_map["pull_quote"] = text_val
+            # closing_text → body_text (closing pattern má body_text slot)
+            elif section_id == "closing_text":
+                if "body_text" in pattern_slot_ids:
+                    content_map["body_text"] = text_val
+            # bio → sidebar
+            elif section_id == "bio":
+                if "sidebar" in pattern_slot_ids:
+                    content_map["sidebar"] = text_val
+            # credits → credit
+            elif section_id == "credits":
+                if "credit" in pattern_slot_ids:
+                    content_map["credit"] = text_val
+            else:
+                logger.warning("Neznámý section_id '%s', přeskakuji", section_id)
 
         # Sestavit image_map — s map override
         imgs = image_paths.get(str(planned_spread.spread_index), [])
@@ -1175,11 +1226,48 @@ def build_from_multi_article_plans(
             if not pattern:
                 raise ValueError(f"Pattern not found: {planned_spread.pattern_id}")
 
-            # Sestavit content_map
+            # Sestavit content_map — s mapováním planner IDs → slot IDs
             content_map = {}
+            pattern_slot_ids = {slot.slot_id for slot in pattern.slots}
+            caption_slot_idx = 0
+            caption_slots = [s.slot_id for s in pattern.slots
+                             if s.slot_id.startswith("caption")]
+
             for section_id in planned_spread.assigned_text_sections:
-                if section_id in text_sections:
-                    content_map[section_id] = text_sections[section_id]
+                if section_id not in text_sections:
+                    continue
+                text_val = text_sections[section_id]
+                if (section_id in pattern_slot_ids
+                        and not section_id.startswith("body_")
+                        and not section_id.startswith("caption_")
+                        and not section_id.startswith("pull_quote_")):
+                    content_map[section_id] = text_val
+                elif section_id.startswith("body_"):
+                    target = "body_text" if "body_text" in pattern_slot_ids else (
+                        "sidebar" if "sidebar" in pattern_slot_ids else None)
+                    if target:
+                        if target in content_map:
+                            content_map[target] += "\n" + text_val
+                        else:
+                            content_map[target] = text_val
+                elif section_id.startswith("caption_"):
+                    if caption_slot_idx < len(caption_slots):
+                        content_map[caption_slots[caption_slot_idx]] = text_val
+                        caption_slot_idx += 1
+                    elif "caption" in pattern_slot_ids:
+                        content_map["caption"] = text_val
+                elif section_id.startswith("pull_quote_"):
+                    if "pull_quote" in pattern_slot_ids:
+                        content_map["pull_quote"] = text_val
+                elif section_id == "closing_text":
+                    if "body_text" in pattern_slot_ids:
+                        content_map["body_text"] = text_val
+                elif section_id == "bio":
+                    if "sidebar" in pattern_slot_ids:
+                        content_map["sidebar"] = text_val
+                elif section_id == "credits":
+                    if "credit" in pattern_slot_ids:
+                        content_map["credit"] = text_val
 
             # Sestavit image_map
             imgs = image_paths.get(str(planned_spread.spread_index), [])
