@@ -174,7 +174,7 @@ def get_api_key() -> str | None:
 def translate_batch(
     elements: list[TextElement],
     project_type: str = "idml",
-    model: str = "claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-4-6",
     max_batch: int = 25,
     backgrounder: str | None = None,
     progress_callback=None,

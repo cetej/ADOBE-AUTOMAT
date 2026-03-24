@@ -141,5 +141,5 @@ class BulkTextUpdate(BaseModel):
 class TranslateRequest(BaseModel):
     """Pozadavek na AI preklad."""
     ids: Optional[list[str]] = None  # None = vsechny neprelozene
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-6"
     overwrite: bool = False  # True = prelozit i uz prelozene
