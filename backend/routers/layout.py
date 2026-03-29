@@ -267,7 +267,10 @@ async def api_upload_text(
     if file and file.filename:
         content = await file.read()
         raw_text = content.decode("utf-8", errors="replace")
-        text_path = d / file.filename
+        safe_name = "".join(c if c.isalnum() or c in ".-_" else "_" for c in file.filename)
+        text_path = d / safe_name
+        if not text_path.resolve().is_relative_to(d.resolve()):
+            raise HTTPException(status_code=400, detail="Invalid filename")
         text_path.write_text(raw_text, encoding="utf-8")
         meta["text_file"] = file.filename
     elif text:
@@ -1465,7 +1468,11 @@ async def api_multi_upload_articles(
                 continue
             content = await f.read()
             raw = content.decode("utf-8", errors="replace")
-            (articles_dir / f.filename).write_text(raw, encoding="utf-8")
+            safe_name = "".join(c if c.isalnum() or c in ".-_" else "_" for c in f.filename)
+            file_path = articles_dir / safe_name
+            if not file_path.resolve().is_relative_to(articles_dir.resolve()):
+                raise HTTPException(status_code=400, detail="Invalid filename")
+            file_path.write_text(raw, encoding="utf-8")
             file_texts.append((f.filename, raw))
         multi = parse_multi_article_files(file_texts)
     elif text:
@@ -1745,6 +1752,13 @@ def api_multi_generate(project_id: str, req: GenerateRequest = GenerateRequest()
                             img_map[str(spread.spread_index)] = spread_imgs
                 article_image_paths[plan_data.project_id] = img_map
 
+            # Sestavit article_maps_dirs — per-article maps adresáře
+            article_maps_dirs: dict[str, Path] = {}
+            for plan_data in multi_plan.article_plans:
+                art_maps = _project_dir(plan_data.project_id) / "maps"
+                if art_maps.exists():
+                    article_maps_dirs[plan_data.project_id] = art_maps
+
             total_spreads = sum(len(p.spreads) for p in multi_plan.article_plans)
             progress["message"] = f"Generuji IDML ({total_spreads} spreadů, {len(multi_plan.article_plans)} článků)..."
 
@@ -1755,6 +1769,7 @@ def api_multi_generate(project_id: str, req: GenerateRequest = GenerateRequest()
                 output_path=str(output_path),
                 article_text_sections=article_text_sections,
                 article_image_paths=article_image_paths,
+                article_maps_dirs=article_maps_dirs if article_maps_dirs else None,
             )
 
             export_path = EXPORTS_DIR / f"{project_id}_multi.idml"
