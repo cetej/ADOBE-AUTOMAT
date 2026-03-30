@@ -26,44 +26,22 @@ PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 # --- Terminologické utility ---
 
-# Graceful import ngm-terminology
+# Graceful import ngm-terminology — JEDINÝ ZDROJ: termdb.db (246K+ termínů)
 try:
-    from ngm_terminology import SpeciesDB, TermDB, NormalizedTermDB
-    _species_db = None
-    _term_db = None
-    _multi_db = None
+    from ngm_terminology import NormalizedTermDB
+    _main_db = None
 
-    # SpeciesDB (218K+ druhů)
-    _species_db_path = Path(r"C:\Users\stock\Documents\000_NGM\BIOLIB\species_names.db")
-    if _species_db_path.exists():
+    _main_db_path = Path(r"C:\Users\stock\Documents\000_NGM\BIOLIB\termdb.db")
+    if _main_db_path.exists():
         try:
-            _species_db = SpeciesDB(str(_species_db_path))
+            _main_db = NormalizedTermDB(str(_main_db_path))
         except Exception:
             pass
 
-    # TermDB (operational)
-    try:
-        from ngm_terminology.config import find_term_db
-        _tdb_path = find_term_db()
-        if _tdb_path:
-            _term_db = TermDB(str(_tdb_path))
-    except Exception:
-        pass
-
-    # NormalizedTermDB (244K+ referenční)
-    _multi_db_path = Path(r"C:\Users\stock\Documents\000_NGM\BIOLIB\termdb.db")
-    if _multi_db_path.exists():
-        try:
-            _multi_db = NormalizedTermDB(str(_multi_db_path))
-        except Exception:
-            pass
-
-    TERMDB_AVAILABLE = True
+    TERMDB_AVAILABLE = _main_db is not None
 except ImportError:
     TERMDB_AVAILABLE = False
-    _species_db = None
-    _term_db = None
-    _multi_db = None
+    _main_db = None
 
 # CorrectorRulesDB
 try:
@@ -75,56 +53,42 @@ except ImportError:
 
 def format_termdb_for_prompt(max_terms: int = 100,
                               article_domains: Optional[List[str]] = None) -> str:
-    """Formátuje TermDB + referenční DB jako markdown kontext."""
+    """Formátuje termdb.db (246K+ termínů) jako markdown kontext."""
+    if not _main_db:
+        return ""
+
     parts = []
-
-    if _term_db:
-        try:
-            conn = _term_db._conn()
-            c = conn.cursor()
-            c.execute("SELECT en, cz, lat, domain FROM terms ORDER BY article_count DESC LIMIT ?",
-                      (max_terms,))
-            rows = c.fetchall()
-            conn.close()
-
-            if rows:
-                lines = [
-                    "## OVĚŘENÉ TERMÍNY Z DATABÁZE (terminology.db)",
-                    "Tyto termíny jsou ověřené — NEMUSÍŠ je ověřovat web searchem:",
-                    "", "| EN | CZ | Latin | Doména |", "|---|---|---|---|"
-                ]
-                for row in rows:
-                    lat = row["lat"] or "—"
-                    lines.append(f"| {row['en']} | {row['cz']} | {lat} | {row['domain']} |")
-                lines.append("")
-                parts.append('\n'.join(lines))
-        except Exception:
-            pass
-
     _domain_categories = {
         'geography': ['country', 'sea', 'river', 'mountain_range', 'lake', 'island'],
         'geology': ['mineral', 'rock', 'geological_period'],
         'chemistry': ['element', 'compound'],
         'medicine': ['disease', 'anatomy', 'organ'],
         'astronomy': ['constellation', 'planet', 'nebula'],
+        'biology': ['species'],
     }
-    if _multi_db and article_domains:
-        try:
-            for domain in article_domains:
-                cats = _domain_categories.get(domain)
-                table = _multi_db.format_for_prompt(max_terms=50, domain=domain, categories=cats)
-                if table:
-                    domain_label = {
-                        'geography': 'GEOGRAFIE', 'geology': 'GEOLOGIE',
-                        'chemistry': 'CHEMIE', 'medicine': 'MEDICÍNA',
-                        'astronomy': 'ASTRONOMIE', 'biology': 'BIOLOGIE',
-                    }.get(domain, domain.upper())
-                    parts.append(
-                        f"## REFERENČNÍ TERMÍNY — {domain_label} (termdb.db)\n"
-                        f"Ověřené překlady z referenční databáze:\n\n{table}\n"
-                    )
-        except Exception:
-            pass
+    _domain_labels = {
+        'geography': 'GEOGRAFIE', 'geology': 'GEOLOGIE',
+        'chemistry': 'CHEMIE', 'medicine': 'MEDICÍNA',
+        'astronomy': 'ASTRONOMIE', 'biology': 'BIOLOGIE',
+        'general': 'OBECNÉ', 'encyclopedia': 'ENCYKLOPEDICKÉ',
+    }
+
+    domains = list(article_domains or ['biology'])
+    if 'biology' not in domains:
+        domains.insert(0, 'biology')
+
+    try:
+        for domain in domains:
+            cats = _domain_categories.get(domain)
+            table = _main_db.format_for_prompt(max_terms=max_terms, domain=domain, categories=cats)
+            if table:
+                label = _domain_labels.get(domain, domain.upper())
+                parts.append(
+                    f"## OVĚŘENÉ TERMÍNY — {label} (termdb.db, 246K+)\n"
+                    f"Tyto termíny jsou ověřené — NEMUSÍŠ je ověřovat web searchem:\n\n{table}\n"
+                )
+    except Exception:
+        pass
 
     if not parts:
         return ""

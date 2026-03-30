@@ -23,11 +23,11 @@ logger = logging.getLogger(__name__)
 # Terminologická databáze (ngm-terminology v2.0 — 244K+ ověřených překladů)
 try:
     from ngm_terminology import NormalizedTermDB
-    _multi_db = NormalizedTermDB(MULTI_DOMAIN_DB_PATH) if Path(MULTI_DOMAIN_DB_PATH).exists() else None
-    if _multi_db:
+    _main_db = NormalizedTermDB(MULTI_DOMAIN_DB_PATH) if Path(MULTI_DOMAIN_DB_PATH).exists() else None
+    if _main_db:
         logger.info("TermDB: načtena referenční DB (%s)", MULTI_DOMAIN_DB_PATH)
 except (ImportError, Exception) as e:
-    _multi_db = None
+    _main_db = None
     logger.info("TermDB: nedostupná (%s)", e)
 
 # === Translation Memory ===
@@ -68,24 +68,12 @@ def update_translation_memory(elements: list[TextElement]) -> int:
 
 
 def write_back_to_termdb(elements: list[TextElement]) -> int:
-    """Zapíše schválené překlady (status=OK) zpět do NG-ROBOT terminology.db.
+    """Zapíše schválené překlady (status=OK) zpět do termdb.db (246K+).
 
     Slouží jako zpětná vazba z ADOBE-AUTOMAT do sdílené terminologické DB.
-    Zapisuje do flat TermDB (operational), ne do referenční NormalizedTermDB.
+    Zapisuje přímo do NormalizedTermDB (termdb.db) — jediný zdroj pravdy.
     """
-    try:
-        from ngm_terminology import TermDB
-        from ngm_terminology.config import find_term_db
-    except ImportError:
-        return 0
-
-    term_db_path = find_term_db()
-    if not term_db_path:
-        return 0
-
-    try:
-        tdb = TermDB(term_db_path)
-    except Exception:
+    if not _main_db:
         return 0
 
     added = 0
@@ -94,14 +82,17 @@ def write_back_to_termdb(elements: list[TextElement]) -> int:
             en = el.contents.strip()
             cz = el.czech.strip()
             if en and cz and len(en) >= 2 and en.lower() != cz.lower():
-                # Určení domény z kategorie elementu
                 domain = _category_to_domain(el.category)
-                is_new = tdb.add_term(
-                    en=en, cz=cz, domain=domain,
-                    source="adobe-automat"
-                )
-                if is_new:
-                    added += 1
+                try:
+                    is_new = _main_db.add_term(
+                        canonical_name=en, domain=domain,
+                        en=en, cz=cz,
+                        source="adobe-automat"
+                    )
+                    if is_new:
+                        added += 1
+                except Exception:
+                    pass
 
     if added:
         logger.info("TermDB write-back: +%d novych terminu z ADOBE-AUTOMAT", added)
@@ -270,7 +261,7 @@ def _build_term_hints(elements: list[TextElement]) -> str:
     Extrahuje EN texty, batch-přeloží přes NormalizedTermDB,
     vrátí markdown tabulku nalezených překladů.
     """
-    if not _multi_db:
+    if not _main_db:
         return ""
 
     try:
@@ -280,7 +271,7 @@ def _build_term_hints(elements: list[TextElement]) -> str:
             return ""
 
         # Batch translate přes referenční DB
-        found = _multi_db.batch_translate(texts, from_lang="en", to_lang="cs")
+        found = _main_db.batch_translate(texts, from_lang="en", to_lang="cs")
         if not found:
             return ""
 
