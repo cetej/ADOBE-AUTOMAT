@@ -14,6 +14,19 @@
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   },
   "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "code-review-graph update --quiet 2>/dev/null || true",
+            "timeout": 5,
+            "statusMessage": "Updating code graph..."
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "",
