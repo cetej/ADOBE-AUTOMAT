@@ -245,6 +245,12 @@ class ClaudeProcessor:
             if was_truncated:
                 logger.warning(f"Odpověď dosáhla limitu {max_tokens or self.MAX_TOKENS} tokenů")
 
+            # Strip leaked thinking artefacts (Sonnet 4.6 thinking:adaptive leaks CoT)
+            if '<antml' in result_content or '<thinking>' in result_content:
+                result_content = re.sub(r'<antml[^>]*>.*?</antml[^>]*>', '', result_content, flags=re.DOTALL)
+                result_content = re.sub(r'<thinking>.*?</thinking>', '', result_content, flags=re.DOTALL)
+                result_content = result_content.strip()
+
             # Strip tool call transcripts
             if '<tool_call>' in result_content or '<tool_response>' in result_content:
                 result_content = re.sub(r'<tool_call>.*?</tool_call>', '', result_content, flags=re.DOTALL)

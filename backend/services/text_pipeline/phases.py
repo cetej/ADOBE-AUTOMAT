@@ -141,6 +141,62 @@ def detect_domains_from_text(text: str) -> List[str]:
 
 
 # ============================================================
+# PATCH formát utility — model vrací jen opravy, ne celý text
+# ============================================================
+
+def _apply_patches(original_text: str, patch_output: str, summary_header: str = "PROVEDENÉ DOPLNĚNÍ") -> str:
+    """Aplikuje PATCH bloky na originální text překladu.
+
+    PATCH formát eliminuje riziko sumarizace (Sonnet 4.6 s thinking:disabled)
+    a chrání <!--[elem-...]-->  markery (model je nevidí = nemůže je poškodit).
+    """
+    text = original_text
+
+    patches = re.split(r'### PATCH \d+:', patch_output)
+
+    applied = 0
+    for patch_block in patches[1:]:  # Skip text before first PATCH
+        patch_block = patch_block.strip()
+
+        # INSERT after
+        after_match = re.search(r'AFTER:\s*(.+?)(?:\n)', patch_block)
+        insert_match = re.search(r'INSERT:\n(.*?)(?:\nEND_PATCH|$)', patch_block, re.DOTALL)
+        if after_match and insert_match:
+            anchor = after_match.group(1).strip()
+            insert_text = insert_match.group(1).strip()
+            if anchor in text:
+                text = text.replace(anchor, anchor + '\n\n' + insert_text, 1)
+                applied += 1
+            continue
+
+        # REPLACE
+        replace_match = re.search(r'REPLACE:\s*(.+?)(?:\nWITH:)', patch_block, re.DOTALL)
+        with_match = re.search(r'WITH:\n(.*?)(?:\nEND_PATCH|$)', patch_block, re.DOTALL)
+        if replace_match and with_match:
+            old_text = replace_match.group(1).strip()
+            new_text = with_match.group(1).strip()
+            if old_text in text:
+                text = text.replace(old_text, new_text, 1)
+                applied += 1
+            continue
+
+        # DELETE
+        delete_match = re.search(r'DELETE:\s*(.+?)(?:\nEND_PATCH|$)', patch_block, re.DOTALL)
+        if delete_match:
+            del_text = delete_match.group(1).strip()
+            if del_text in text:
+                text = text.replace(del_text, '', 1)
+                applied += 1
+
+    # Přidej shrnutí na konec
+    summary_match = re.search(r'## (?:SHRNUTÍ|' + re.escape(summary_header) + r')\n(.*?)$', patch_output, re.DOTALL)
+    summary = summary_match.group(0) if summary_match else f"## {summary_header}\n- Aplikováno {applied} oprav"
+    text = text.rstrip() + '\n\n---\n\n' + summary
+
+    return text
+
+
+# ============================================================
 # Phase 2: Kontrola úplnosti překladu
 # ============================================================
 
@@ -154,6 +210,9 @@ class CompletenessChecker(ClaudeProcessor):
 
     def check_completeness(self, original: str, translation: str) -> ProcessingResult:
         """Zkontroluje úplnost překladu a doplní chybějící části.
+
+        Používá PATCH formát — model vrací jen opravy, ne celý text.
+        Eliminuje riziko sumarizace a ztráty <!--[elem-...]--> markerů.
 
         Args:
             original: Originální anglický text
@@ -172,35 +231,62 @@ class CompletenessChecker(ClaudeProcessor):
 
 {translation}
 """
-        instruction = """TVÝM ÚKOLEM JE ZKONTROLOVAT A OPRAVIT PŘEKLAD.
+        instruction = """TVÝM ÚKOLEM JE ZKONTROLOVAT PŘEKLAD A VRÁTIT OPRAVY VE FORMÁTU PATCH.
 
-⚠️ KRITICKÉ:
-- NIKDY NEZKRACUJ TEXT! Výstup MUSÍ obsahovat CELÝ překlad od začátku do konce.
-- ZACHOVEJ VŠECHNY HTML značky <!--[elem-...]-->...<!--[/elem-...]-->  beze změny!
-  Tyto značky slouží k identifikaci textových bloků a NESMÍ být odstraněny ani změněny.
+⚠️ NEREPRODUKUJ CELÝ TEXT! Vrať JEN opravy v PATCH formátu.
 
 POSTUP:
 1. Porovnej originál s překladem — identifikuj VŠECHNY chybějící části
-2. Pro každou chybějící část:
-   - Přelož ji do češtiny
-   - Vlož ji na správné místo v překladu (do příslušného <!--[elem-...]--> bloku)
-3. Zkontroluj, že jsou přeloženy VŠECHNY popisky
+2. Pro každou chybějící část vytvoř PATCH blok
 
-VÝSTUP:
-1. KOMPLETNÍ OPRAVENÝ PŘEKLAD se všemi <!--[elem-...]--> značkami
-2. Na konci sekce ## PROVEDENÉ DOPLNĚNÍ se seznamem doplněných částí
+VÝSTUPNÍ FORMÁT (PATCH bloky):
+
+Pokud je překlad kompletní a bez chyb, vrať:
+ŽÁDNÉ OPRAVY
+
+Pokud jsou potřeba opravy, vrať PATCH bloky:
+
+### PATCH 1:
+AFTER: [přesný text v překladu, za který se vloží nový obsah]
+INSERT:
+[přeložený chybějící text]
+END_PATCH
+
+### PATCH 2:
+REPLACE: [přesný existující text k nahrazení]
+WITH:
+[opravený text]
+END_PATCH
+
+### PATCH 3:
+DELETE: [přesný text k odstranění]
+END_PATCH
+
+## PROVEDENÉ DOPLNĚNÍ
+- [seznam provedených změn]
 
 PRAVIDLA:
-- Text musí mít STEJNOU nebo VĚTŠÍ délku než vstupní překlad
-- Zachovej VŠECHNY sekce a odstavce
-- NIKDY nevracej jen analýzu — VŽDY vrať KOMPLETNÍ opravený text"""
+- AFTER/REPLACE/DELETE musí být PŘESNÉ kopie textu z překladu (case-sensitive)
+- Používej dostatečně dlouhé kotvy (min. 15 znaků) pro jednoznačnou identifikaci
+- NIKDY neměň <!--[elem-...]--> značky — jsou neviditelné pro tebe
+- Každá chybějící část originálu = jeden PATCH blok"""
 
         projects_dir = PROMPTS_DIR / "2-KONTROLA_UPLNOSTI_PREKLADU"
-        return self.process_with_project(
+        result = self.process_with_project(
             content=content,
             project_dir=projects_dir,
             additional_instruction=instruction
         )
+
+        # Aplikuj PATCH bloky na originální překlad
+        if result.success and result.content:
+            if "ŽÁDNÉ OPRAVY" in result.content:
+                result.content = translation + "\n\n---\n\n## PROVEDENÉ DOPLNĚNÍ\n- Překlad je kompletní, žádné opravy."
+            elif "### PATCH" in result.content:
+                result.content = _apply_patches(translation, result.content, "PROVEDENÉ DOPLNĚNÍ")
+            # else: model vrátil neočekávaný formát — ponechat raw output
+
+        return result
 
 
 # ============================================================
@@ -398,11 +484,11 @@ DŮLEŽITÉ: NEREPRODUKUJ celý text. Vrať JEN tabulky výše."""
 
         projects_dir = PROMPTS_DIR / "3-OVERENI_TERMINU"
 
-        # Research config: thinking ON, medium effort
+        # Research config: thinking ON, high effort (medium leakuje CoT do výstupu)
         saved = (self.DISABLE_THINKING, self.EFFORT, self.MAX_TOKENS)
         try:
             self.DISABLE_THINKING = False
-            self.EFFORT = "medium"
+            self.EFFORT = "high"
             self.MAX_TOKENS = 16000
             logger.info("[Phase 3 Call 1/2] Research: web search + reasoning")
             return self.process_with_project(
@@ -583,7 +669,7 @@ DŮLEŽITÉ: NEREPRODUKUJ celý článek. Vrať JEN tabulky."""
         saved = (self.DISABLE_THINKING, self.EFFORT, self.MAX_TOKENS)
         try:
             self.DISABLE_THINKING = False
-            self.EFFORT = "medium"
+            self.EFFORT = "high"
             self.MAX_TOKENS = 16000
             logger.info("[Phase 4 Call 1/2] Audit: reasoning bez tools")
             return self.process_with_project(
@@ -745,7 +831,10 @@ class LanguageContextOptimizer(ClaudeProcessor):
         return "\n\n---\n\n# KNOWLEDGE BASE\n\n" + "\n\n---\n\n".join(parts)
 
     def check_language_and_context(self, article_content: str) -> ProcessingResult:
-        """Provede komplexní jazykovou kontrolu."""
+        """Provede komplexní jazykovou kontrolu.
+
+        Používá PATCH formát — model vrací jen opravy, ne celý text.
+        """
         projects_dir = PROMPTS_DIR / "5-JAZYK-KONTEXT"
         knowledge_base = self._load_knowledge_base(projects_dir)
 
@@ -753,13 +842,11 @@ class LanguageContextOptimizer(ClaudeProcessor):
         if corrector_rules:
             knowledge_base = (knowledge_base or "") + corrector_rules
 
-        instruction = f"""TVÝM ÚKOLEM JE PROVÉST KOMPLEXNÍ JAZYKOVOU KONTROLU A OPRAVIT NALEZENÉ CHYBY.
+        instruction = f"""TVÝM ÚKOLEM JE PROVÉST KOMPLEXNÍ JAZYKOVOU KONTROLU A VRÁTIT OPRAVY VE FORMÁTU PATCH.
 
-⚠️ KRITICKÉ:
-- NIKDY NEZKRACUJ TEXT!
-- ZACHOVEJ VŠECHNY <!--[elem-...]--> značky beze změny!
+⚠️ NEREPRODUKUJ CELÝ TEXT! Vrať JEN opravy v PATCH formátu.
 
-TEXT K OPRAVĚ:
+TEXT K KONTROLE:
 {article_content}
 
 ---
@@ -791,17 +878,49 @@ KATEGORIE KONTROL (všechny povinné):
 
 8. LOGICKÁ KONZISTENCE
 
-VÝSTUP:
-1. KOMPLETNÍ TEXT s opravami (se všemi <!--[elem-...]--> značkami)
-2. Na konci ## JAZYKOVÉ A KONTEXTOVÉ OPRAVY se seznamem změn
+VÝSTUPNÍ FORMÁT (PATCH bloky):
 
-NIKDY nevracej jen analýzu — VŽDY vrať KOMPLETNÍ text.
+Pokud je text bez chyb, vrať:
+ŽÁDNÉ OPRAVY
+
+Pokud jsou potřeba opravy:
+
+### PATCH 1:
+REPLACE: [přesný existující text k nahrazení — min. 15 znaků]
+WITH:
+[opravený text]
+END_PATCH
+
+### PATCH 2:
+REPLACE: [další text k nahrazení]
+WITH:
+[opravený text]
+END_PATCH
+
+## JAZYKOVÉ A KONTEXTOVÉ OPRAVY
+- [kategorie]: [co bylo opraveno]
+
+PRAVIDLA:
+- REPLACE musí být PŘESNÁ kopie textu z článku (case-sensitive)
+- Používej dostatečně dlouhé kotvy pro jednoznačnou identifikaci
+- NIKDY neměň <!--[elem-...]--> značky — jsou neviditelné pro tebe
+- Každá oprava = jeden PATCH blok
 {knowledge_base}"""
 
-        return self.process_with_project(
+        result = self.process_with_project(
             content="", project_dir=projects_dir,
             additional_instruction=instruction
         )
+
+        # Aplikuj PATCH bloky na originální text
+        if result.success and result.content:
+            if "ŽÁDNÉ OPRAVY" in result.content:
+                result.content = article_content + "\n\n---\n\n## JAZYKOVÉ A KONTEXTOVÉ OPRAVY\n- Text je v pořádku, žádné opravy."
+            elif "### PATCH" in result.content:
+                result.content = _apply_patches(article_content, result.content, "JAZYKOVÉ A KONTEXTOVÉ OPRAVY")
+            # else: neočekávaný formát — ponechat raw output
+
+        return result
 
 
 # ============================================================
@@ -817,36 +936,54 @@ class StylisticEditor(ClaudeProcessor):
     MAX_TOKENS = 32000
 
     def check_style(self, article_content: str) -> ProcessingResult:
-        """Provede stylistickou kontrolu."""
-        instruction = f"""TVÝM ÚKOLEM JE VYLEPŠIT STYLISTIKU A VRÁTIT OPRAVENÝ TEXT.
+        """Provede stylistickou kontrolu.
 
-⚠️ KRITICKÉ:
-- NIKDY NEZKRACUJ TEXT!
-- ZACHOVEJ VŠECHNY <!--[elem-...]--> značky beze změny!
+        Používá PATCH formát — model vrací jen opravy, ne celý text.
+        """
+        instruction = f"""TVÝM ÚKOLEM JE VYLEPŠIT STYLISTIKU A VRÁTIT OPRAVY VE FORMÁTU PATCH.
 
-TEXT K OPRAVĚ:
+⚠️ NEREPRODUKUJ CELÝ TEXT! Vrať JEN opravy v PATCH formátu.
+
+TEXT K KONTROLE:
 {article_content}
 
 ---
 
-POSTUP:
-1. Zkontroluj: plynulost, rytmus, slovní zásobu, opakování slov, kohezi odstavců
-2. Oprav PŘÍMO V TEXTU
-3. Zachovej CELOU strukturu
+KONTROLUJ: plynulost, rytmus, slovní zásobu, opakování slov, kohezi odstavců
 
-VÝSTUP:
-1. KOMPLETNÍ TEXT s vylepšenou stylistikou
-2. Na konci ## STYLISTICKÉ ÚPRAVY se seznamem změn
+VÝSTUPNÍ FORMÁT (PATCH bloky):
+
+Pokud je text stylisticky v pořádku, vrať:
+ŽÁDNÉ OPRAVY
+
+Pokud jsou potřeba opravy:
+
+### PATCH 1:
+REPLACE: [přesný existující text k nahrazení — min. 15 znaků]
+WITH:
+[stylisticky vylepšený text]
+END_PATCH
+
+## STYLISTICKÉ ÚPRAVY
+- [co bylo změněno a proč]
 
 PRAVIDLA:
-- Zachovej VŠECHNY <!--[elem-...]--> značky na jejich místech
-- Délka výstupu STEJNÁ nebo VĚTŠÍ než vstup
-- Zachovej autorský styl a význam
-
-NIKDY nevracej jen analýzu — VŽDY vrať KOMPLETNÍ text."""
+- REPLACE musí být PŘESNÁ kopie textu z článku (case-sensitive)
+- Používej dostatečně dlouhé kotvy pro jednoznačnou identifikaci
+- NIKDY neměň <!--[elem-...]--> značky — jsou neviditelné pro tebe
+- Zachovej autorský styl a význam — jen vylepšuj, neměň smysl"""
 
         projects_dir = PROMPTS_DIR / "7-STYLISTIKA"
-        return self.process_with_project(
+        result = self.process_with_project(
             content="", project_dir=projects_dir,
             additional_instruction=instruction
         )
+
+        # Aplikuj PATCH bloky na originální text
+        if result.success and result.content:
+            if "ŽÁDNÉ OPRAVY" in result.content:
+                result.content = article_content + "\n\n---\n\n## STYLISTICKÉ ÚPRAVY\n- Text je stylisticky v pořádku."
+            elif "### PATCH" in result.content:
+                result.content = _apply_patches(article_content, result.content, "STYLISTICKÉ ÚPRAVY")
+
+        return result
