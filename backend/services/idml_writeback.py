@@ -26,6 +26,7 @@ def writeback_idml(
     idml_path: str | Path,
     elements: list,
     project_id: str,
+    output_suffix: str = "_CZ",
 ) -> dict:
     """Zapise ceske preklady zpet do IDML a vytvori novy soubor.
 
@@ -33,6 +34,8 @@ def writeback_idml(
         idml_path: Cesta k originalnimu IDML.
         elements: Seznam TextElement s preklady.
         project_id: ID projektu (pro nazev exportu).
+        output_suffix: Suffix pro nazev vystupniho souboru (default "_CZ",
+                       pro korektury "_CZ_r01" apod.)
 
     Returns:
         dict s vysledkem: output_path, replaced, skipped, errors
@@ -79,7 +82,7 @@ def writeback_idml(
 
         # Pack zpet
         stem = idml_path.stem
-        output_name = f"{stem}_CZ.idml"
+        output_name = f"{stem}{output_suffix}.idml"
         output_path = EXPORTS_DIR / project_id / output_name
         output_path.parent.mkdir(parents=True, exist_ok=True)
         pack_idml(temp_dir, output_path)

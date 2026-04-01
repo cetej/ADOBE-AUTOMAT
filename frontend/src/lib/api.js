@@ -108,6 +108,25 @@ export const api = {
   writebackMap: (id) => request('POST', `/projects/${id}/writeback-map`),
   writebackMapPreview: (id) => request('POST', `/projects/${id}/writeback-map/preview`),
 
+  // Korektury
+  correctionsManual: (id, entries) => request('POST', `/projects/${id}/corrections/manual`, { entries }),
+  correctionsUpload: async (id, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${BASE}/projects/${id}/corrections/upload`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+  },
+  correctionsApply: (id, roundId) => request('POST', `/projects/${id}/corrections/${roundId}/apply`),
+  correctionsList: (id) => request('GET', `/projects/${id}/corrections`),
+  correctionsGet: (id, roundId) => request('GET', `/projects/${id}/corrections/${roundId}`),
+
   // === Layout Generator ===
   layoutTemplates: () => request('GET', '/layout/templates'),
   layoutPatterns: () => request('GET', '/layout/patterns'),

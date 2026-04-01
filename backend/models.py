@@ -109,6 +109,9 @@ class Project(BaseModel):
     updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     elements: list[TextElement] = []
     exports: dict[str, str] = {}
+    # Korektury
+    corrections: list[str] = []           # round IDs: ["r01", "r02"]
+    current_correction_round: int = 0
     # IDML specificke
     idml_path: Optional[str] = None
     translation_doc: Optional[str] = None
