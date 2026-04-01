@@ -302,108 +302,8 @@ class TermVerifier(ClaudeProcessor):
     MAX_TOKENS = 32000
     TERM_SEARCH_MAX_USES = 8  # sníženo — většina se řeší lokálně
 
-    @staticmethod
-    def _local_lookup(text: str) -> tuple[str, list[dict]]:
-        """Vyhledá termíny v lokálních DB — vrací kontext a seznam nalezených."""
-        found = []
-        # Extrahuj unikátní slova/fráze z textu (bez HTML značek)
-        import re
-        clean = re.sub(r'<!--\[.*?\]-->', '', text)
-
-        if _multi_db:
-            try:
-                # Hledej anglické termíny ve zdrojovém textu
-                words = set()
-                for match in re.finditer(r'[A-Z][a-z]+(?:\s+[A-Z]?[a-z]+)*', clean):
-                    words.add(match.group())
-                for match in re.finditer(r'[A-Z]{2,}', clean):
-                    words.add(match.group())
-
-                for word in words:
-                    if len(word) < 3:
-                        continue
-                    try:
-                        results = _multi_db.lookup(word)
-                        if results:
-                            for r in results[:1]:  # první match
-                                found.append({
-                                    "en": word,
-                                    "cz": r.get("cz", r.get("czech", "")),
-                                    "source": "termdb",
-                                })
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        if _species_db:
-            try:
-                for match in re.finditer(r'[A-Z][a-z]+(?:\s+[a-z]+)?', clean):
-                    word = match.group()
-                    if len(word) < 4:
-                        continue
-                    try:
-                        result = _species_db.lookup(word)
-                        if result:
-                            found.append({
-                                "en": word,
-                                "cz": result.get("cz", result.get("czech_name", "")),
-                                "lat": result.get("latin", word),
-                                "source": "species_db",
-                            })
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        if _term_db:
-            try:
-                conn = _term_db._conn()
-                c = conn.cursor()
-                for match in re.finditer(r'[A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+)*', clean):
-                    word = match.group()
-                    if len(word) < 3:
-                        continue
-                    c.execute("SELECT en, cz, lat FROM terms WHERE LOWER(en) = LOWER(?) LIMIT 1", (word,))
-                    row = c.fetchone()
-                    if row:
-                        found.append({
-                            "en": row["en"],
-                            "cz": row["cz"],
-                            "lat": row["lat"] or "",
-                            "source": "terminology_db",
-                        })
-                conn.close()
-            except Exception:
-                pass
-
-        # Deduplicate by EN
-        seen = set()
-        unique = []
-        for f in found:
-            key = f["en"].lower()
-            if key not in seen:
-                seen.add(key)
-                unique.append(f)
-
-        if unique:
-            lines = [
-                "## LOKÁLNĚ OVĚŘENÉ TERMÍNY (z databáze — NEOVĚŘUJ web searchem)",
-                "", "| EN | CZ | Latin | Zdroj |", "|---|---|---|---|"
-            ]
-            for f in unique:
-                lines.append(f"| {f['en']} | {f['cz']} | {f.get('lat', '—')} | {f['source']} |")
-            lines.append("")
-            context = "\n".join(lines)
-        else:
-            context = ""
-
-        logger.info(f"[Phase 3] Lokální DB lookup: {len(unique)} termínů nalezeno")
-        return context, unique
-
-    def _research_terms(self, translated_content: str, termdb_context: str = "",
-                         local_found: list = None) -> ProcessingResult:
-        """Call 1 (Research): lokální DB kontext + web search jen pro neznámé."""
+    def _research_terms(self, translated_content: str, termdb_context: str = "") -> ProcessingResult:
+        """Call 1 (Research): DB kontext z format_termdb_for_prompt + web search jen pro neznámé."""
         db_block = ""
         if termdb_context:
             db_block = f"""{termdb_context}
@@ -411,17 +311,10 @@ class TermVerifier(ClaudeProcessor):
 ---
 
 """
-        local_block = ""
-        if local_found:
-            local_block = f"""## PŘEDEM OVĚŘENÉ TERMÍNY (lokální DB — {len(local_found)} termínů)
-Tyto termíny jsou OVĚŘENÉ z lokální databáze. NEPOUŽÍVEJ na ně web search.
-Soustřeď web search JEN na termíny, které NEJSOU v lokální DB.
-
-"""
 
         instruction = f"""TVÝM ÚKOLEM JE IDENTIFIKOVAT A OVĚŘIT ODBORNÉ TERMÍNY V TEXTU.
 
-{db_block}{local_block}TEXT K ANALÝZE:
+{db_block}TEXT K ANALÝZE:
 {translated_content}
 
 ---
@@ -537,15 +430,14 @@ DŮLEŽITÉ: NEREPRODUKUJ celý text. Vrať JEN tabulky výše."""
             self.model = saved_model
 
     def verify_terms(self, translated_content: str, termdb_context: str = "") -> ProcessingResult:
-        """Ověří termíny (Lokální DB → Research → Apply)."""
-        # Krok 0: Lokální DB lookup — okamžitý, bez API volání
-        local_context, local_found = self._local_lookup(translated_content)
+        """Ověří termíny (DB kontext v promptu → Research → Apply).
 
-        # Call 1: Research — web search jen pro neznámé termíny
-        full_context = (local_context + "\n\n" + termdb_context).strip() if local_context else termdb_context
-        research_result = self._research_terms(
-            translated_content, full_context, local_found=local_found
-        )
+        DB kontext dodává format_termdb_for_prompt() — injektuje ověřené termíny
+        z termdb.db (246K+) přímo do promptu. LLM pak ověřuje web searchem
+        jen termíny, které v DB nejsou.
+        """
+        # Call 1: Research — DB kontext v promptu, web search jen pro neznámé
+        research_result = self._research_terms(translated_content, termdb_context)
         if not research_result.success:
             logger.error(f"Research selhal: {research_result.error}")
             return research_result
