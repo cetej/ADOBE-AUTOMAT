@@ -267,7 +267,9 @@
       "mcp__github__list_commits",
       "Bash(python -c \"from services.layout.spread_patterns import get_all_patterns, register_custom_pattern, validate_pattern, delete_custom_pattern, is_builtin_pattern; print\\(''OK, patterns:'', len\\(get_all_patterns\\(\\)\\)\\)\")",
       "Bash(curl -s http://127.0.0.1:8100/api/layout/patterns?detail=true)",
-      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''Patterns: {len\\(d[\"\"patterns\"\"]\\)}''''\\); [print\\(f''''  {p[\"\"id\"\"]}: {p[\"\"name\"\"]} \\(builtin={p[\"\"is_builtin\"\"]}, slots={len\\(p.get\\(\"\"slots\"\",[]\\)\\)}\\)''''\\) for p in d[''''patterns''''][:3]]\")"
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''Patterns: {len\\(d[\"\"patterns\"\"]\\)}''''\\); [print\\(f''''  {p[\"\"id\"\"]}: {p[\"\"name\"\"]} \\(builtin={p[\"\"is_builtin\"\"]}, slots={len\\(p.get\\(\"\"slots\"\",[]\\)\\)}\\)''''\\) for p in d[''''patterns''''][:3]]\")",
+      "Skill(checkpoint)",
+      "Skill(checkpoint:*)"
     ]
   }
 }
