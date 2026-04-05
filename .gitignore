@@ -32,3 +32,18 @@ output/
 
 # Test artifacts
 grouped_test.xlsx
+
+# Claude Code internals
+.claude/memory/
+.claude/plans/
+.claude/settings.local.json
+
+# Temp files
+*.xlsx
+*.tmp
+
+# Dist-info (accidentally unpacked packages)
+*.dist-info/
+
+# Playwright MCP (forbidden)
+.playwright-mcp/
