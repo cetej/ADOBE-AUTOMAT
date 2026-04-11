@@ -279,7 +279,8 @@ class CompletenessChecker(ClaudeProcessor):
     DISABLE_THINKING = True
     MAX_TOKENS = 32000
 
-    def check_completeness(self, original: str, translation: str) -> ProcessingResult:
+    def check_completeness(self, original: str, translation: str,
+                           system_context: str = "") -> ProcessingResult:
         """Zkontroluje úplnost překladu a doplní chybějící části.
 
         Používá PATCH formát — model vrací jen opravy, ne celý text.
@@ -500,7 +501,8 @@ DŮLEŽITÉ: NEREPRODUKUJ celý text. Vrať JEN tabulky výše."""
         finally:
             self.model = saved_model
 
-    def verify_terms(self, translated_content: str, termdb_context: str = "") -> ProcessingResult:
+    def verify_terms(self, translated_content: str, termdb_context: str = "",
+                     system_context: str = "") -> ProcessingResult:
         """Ověří termíny (DB kontext v promptu → Research → Apply).
 
         DB kontext dodává format_termdb_for_prompt() — injektuje ověřené termíny
@@ -583,12 +585,22 @@ class FactChecker(ClaudeProcessor):
     MAX_TOKENS = 32000
     FACT_SEARCH_MAX_USES = 10
 
-    def _audit_facts(self, article_content: str) -> ProcessingResult:
+    def _audit_facts(self, article_content: str,
+                     system_context: str = "") -> ProcessingResult:
         """Call 1 (Audit): identifikace pochybných faktů + převod jednotek."""
+        ctx_block = ""
+        if system_context:
+            ctx_block = f"""
+## KONTEXT Z PŘEDCHOZÍCH FÁZÍ (pouze pro referenci — NEREPRODUKUJ):
+{system_context}
+---
+"""
+
         instruction = f"""TVÝM ÚKOLEM JE PROVÉST AUDIT FAKTŮ — identifikovat chyby a navrhnout ověření.
 
 ⚠️ Text obsahuje HTML značky <!--[elem-...]-->. IGNORUJ je při analýze.
-
+⚠️ NEREPRODUKUJ kontext z předchozích fází.
+{ctx_block}
 ČLÁNEK K AUDITU:
 {article_content}
 
@@ -762,10 +774,11 @@ Pokud žádné opravy nejsou potřeba, vrať:
 
         return text, report
 
-    def check_facts(self, article_content: str) -> ProcessingResult:
-        """Zkontroluje fakta (Audit → Verify & Apply)."""
+    def check_facts(self, article_content: str,
+                    system_context: str = "") -> ProcessingResult:
+        """Zkontroluje fakta (Audit → Verify → PATCH Apply)."""
         # Call 1: Audit
-        audit_result = self._audit_facts(article_content)
+        audit_result = self._audit_facts(article_content, system_context=system_context)
         if not audit_result.success:
             logger.error(f"Audit selhal: {audit_result.error}")
             return audit_result
@@ -873,7 +886,8 @@ class LanguageContextOptimizer(ClaudeProcessor):
             return ""
         return "\n\n---\n\n# KNOWLEDGE BASE\n\n" + "\n\n---\n\n".join(parts)
 
-    def check_language_and_context(self, article_content: str) -> ProcessingResult:
+    def check_language_and_context(self, article_content: str,
+                                   system_context: str = "") -> ProcessingResult:
         """Provede komplexní jazykovou kontrolu.
 
         Používá PATCH formát — model vrací jen opravy, ne celý text.
@@ -885,10 +899,20 @@ class LanguageContextOptimizer(ClaudeProcessor):
         if corrector_rules:
             knowledge_base = (knowledge_base or "") + corrector_rules
 
+        # Kontext z předchozích fází — separátně od článku
+        ctx_block = ""
+        if system_context:
+            ctx_block = f"""
+## KONTEXT Z PŘEDCHOZÍCH FÁZÍ (pouze pro referenci — NEREPRODUKUJ):
+{system_context}
+---
+"""
+
         instruction = f"""TVÝM ÚKOLEM JE PROVÉST KOMPLEXNÍ JAZYKOVOU KONTROLU A VRÁTIT OPRAVY VE FORMÁTU PATCH.
 
 ⚠️ NEREPRODUKUJ CELÝ TEXT! Vrať JEN opravy v PATCH formátu.
-
+⚠️ NEREPRODUKUJ kontext z předchozích fází — slouží JEN jako referenční informace.
+{ctx_block}
 TEXT K KONTROLE:
 {article_content}
 
@@ -978,15 +1002,26 @@ class StylisticEditor(ClaudeProcessor):
     DISABLE_THINKING = True
     MAX_TOKENS = 32000
 
-    def check_style(self, article_content: str) -> ProcessingResult:
+    def check_style(self, article_content: str,
+                    system_context: str = "") -> ProcessingResult:
         """Provede stylistickou kontrolu.
 
         Používá PATCH formát — model vrací jen opravy, ne celý text.
         """
+        # Kontext z předchozích fází — separátně od článku
+        ctx_block = ""
+        if system_context:
+            ctx_block = f"""
+## KONTEXT Z PŘEDCHOZÍCH FÁZÍ (pouze pro referenci — NEREPRODUKUJ):
+{system_context}
+---
+"""
+
         instruction = f"""TVÝM ÚKOLEM JE VYLEPŠIT STYLISTIKU A VRÁTIT OPRAVY VE FORMÁTU PATCH.
 
 ⚠️ NEREPRODUKUJ CELÝ TEXT! Vrať JEN opravy v PATCH formátu.
-
+⚠️ NEREPRODUKUJ kontext z předchozích fází.
+{ctx_block}
 TEXT K KONTROLE:
 {article_content}
 

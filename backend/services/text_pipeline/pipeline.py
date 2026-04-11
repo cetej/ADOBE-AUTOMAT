@@ -296,34 +296,39 @@ class TextPipeline:
                 "---\n\n"
             )
 
-        # Sestavení kontextu
-        ctx = backgrounder_ctx + (findings_ctx or "")
-        text_with_ctx = ctx + current_text if ctx else current_text
+        # Sestavení kontextu — ODDĚLENĚ od textu článku
+        # Kontext se předává jako system_context parametr, NIKDY se nelepí na článek.
+        # Pokud se nalepí na text, model ho echuje zpět do výstupu.
+        system_context = backgrounder_ctx + (findings_ctx or "")
 
         if phase == 2:
             checker = CompletenessChecker(api_key=api_key)
-            return checker.check_completeness(original_text, text_with_ctx)
+            return checker.check_completeness(original_text, current_text,
+                                               system_context=system_context)
 
         elif phase == 3:
             verifier = TermVerifier(api_key=api_key)
-            # Build TermDB context
             domains = detect_domains_from_text(current_text)
             termdb_ctx = format_termdb_for_prompt(
                 max_terms=100, article_domains=domains
             )
-            return verifier.verify_terms(text_with_ctx, termdb_ctx)
+            return verifier.verify_terms(current_text, termdb_ctx,
+                                          system_context=system_context)
 
         elif phase == 4:
             checker = FactChecker(api_key=api_key)
-            return checker.check_facts(text_with_ctx)
+            return checker.check_facts(current_text,
+                                        system_context=system_context)
 
         elif phase == 5:
             optimizer = LanguageContextOptimizer(api_key=api_key)
-            return optimizer.check_language_and_context(text_with_ctx)
+            return optimizer.check_language_and_context(current_text,
+                                                         system_context=system_context)
 
         elif phase == 6:
             editor = StylisticEditor(api_key=api_key)
-            return editor.check_style(text_with_ctx)
+            return editor.check_style(current_text,
+                                       system_context=system_context)
 
         else:
             return ProcessingResult(
