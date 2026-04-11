@@ -135,41 +135,84 @@ async def api_writeback_map_preview(project_id: str):
     return preview_map(project.elements)
 
 
+# Kategorie pro čistý export (redakční obsah)
+_CLEAN_CATEGORIES = {
+    "title", "heading", "subtitle", "lead", "body", "main_text",
+    "bullet", "caption", "info_boxes", "annotations", "labels",
+}
+
+
+def _clean_elements(project) -> list:
+    """Vrátí elementy s překladem, seřazené pro čistý redakční výstup."""
+    # Pořadí sekcí
+    section_order = ["title", "heading", "subtitle", "lead", "body", "main_text",
+                     "bullet", "caption", "info_boxes", "annotations", "labels"]
+
+    def sort_key(elem):
+        cat = (elem.category.value if elem.category else "") or ""
+        try:
+            return section_order.index(cat)
+        except ValueError:
+            return len(section_order)
+
+    return sorted(
+        [e for e in project.elements
+         if e.czech and e.czech.strip()
+         and (not e.category or e.category.value in _CLEAN_CATEGORIES or e.category is None)],
+        key=sort_key,
+    )
+
+
+def _section_label(category: str) -> str:
+    """Český název sekce pro export."""
+    labels = {
+        "title": "Titulek", "heading": "Nadpis", "subtitle": "Podtitulek",
+        "lead": "Perex", "body": "Text článku", "main_text": "Hlavní text",
+        "bullet": "Odrážky", "caption": "Popisky",
+        "info_boxes": "Informační boxy", "annotations": "Anotace",
+        "labels": "Popisky grafik/map",
+    }
+    return labels.get(category, category or "Ostatní")
+
+
 @router.get("/api/projects/{project_id}/export-docx")
 async def api_export_docx(project_id: str):
-    """Exportuje překlad jako Word dokument (.docx)."""
+    """Exportuje čistý překlad jako Word dokument — jen redakční text."""
     from docx import Document
-    from docx.shared import Pt, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Pt
 
     project = get_project(project_id)
     if not project:
         raise HTTPException(404, "Project not found")
 
+    elements = _clean_elements(project)
+    if not elements:
+        raise HTTPException(400, "Žádné přeložené elementy k exportu")
+
     doc = Document()
     doc.add_heading(project.name, level=1)
-    doc.add_paragraph(f"Překlad — {project.id}")
 
-    # Seskup elementy podle story/layer
-    current_group = None
-    for elem in project.elements:
-        if not elem.czech:
-            continue
-
-        group = elem.story_id or elem.layer_name or "other"
-        if group != current_group:
-            current_group = group
-            doc.add_heading(group, level=2)
+    current_section = None
+    for elem in elements:
+        cat = (elem.category.value if elem.category else "") or ""
+        section = _section_label(cat)
+        if section != current_section:
+            current_section = section
+            doc.add_heading(section, level=2)
 
         p = doc.add_paragraph()
-        # Originál šedě
-        run_en = p.add_run(f"[{elem.id}] {elem.contents or ''}")
-        run_en.font.size = Pt(8)
-        run_en.font.color.rgb = RGBColor(150, 150, 150)
-        p.add_run("\n")
-        # Překlad černě
-        run_cz = p.add_run(elem.czech)
-        run_cz.font.size = Pt(11)
+        run = p.add_run(elem.czech)
+        # Titulky a nadpisy větším písmem
+        if cat in ("title", "heading"):
+            run.font.size = Pt(14)
+            run.bold = True
+        elif cat in ("subtitle", "lead"):
+            run.font.size = Pt(12)
+            run.italic = True
+        elif cat in ("caption", "labels", "annotations"):
+            run.font.size = Pt(9)
+        else:
+            run.font.size = Pt(11)
 
     export_dir = EXPORTS_DIR / project_id
     export_dir.mkdir(parents=True, exist_ok=True)
@@ -185,26 +228,32 @@ async def api_export_docx(project_id: str):
 
 @router.get("/api/projects/{project_id}/export-md")
 async def api_export_md(project_id: str):
-    """Exportuje překlad jako Markdown dokument (.md)."""
+    """Exportuje čistý překlad jako Markdown — jen redakční text."""
     project = get_project(project_id)
     if not project:
         raise HTTPException(404, "Project not found")
 
-    lines = [f"# {project.name}", f"", f"Překlad — {project.id}", ""]
+    elements = _clean_elements(project)
+    if not elements:
+        raise HTTPException(400, "Žádné přeložené elementy k exportu")
 
-    current_group = None
-    for elem in project.elements:
-        if not elem.czech:
-            continue
+    lines = [f"# {project.name}", ""]
 
-        group = elem.story_id or elem.layer_name or "other"
-        if group != current_group:
-            current_group = group
-            lines.append(f"## {group}")
+    current_section = None
+    for elem in elements:
+        cat = (elem.category.value if elem.category else "") or ""
+        section = _section_label(cat)
+        if section != current_section:
+            current_section = section
+            lines.append(f"## {section}")
             lines.append("")
 
-        lines.append(f"**[{elem.id}]** _{elem.contents or ''}_")
-        lines.append(f"{elem.czech}")
+        if cat in ("title", "heading"):
+            lines.append(f"### {elem.czech}")
+        elif cat in ("caption", "labels", "annotations"):
+            lines.append(f"*{elem.czech}*")
+        else:
+            lines.append(elem.czech)
         lines.append("")
 
     md_content = "\n".join(lines)
