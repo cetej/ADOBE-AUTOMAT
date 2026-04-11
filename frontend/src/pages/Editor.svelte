@@ -697,8 +697,10 @@
                         {:else}
                           <span class="text-gray-300 text-sm group-hover:text-gray-400 italic">dvojklik pro editaci</span>
                         {/if}
-                        {#if el.notes}
+                        {#if el.notes && !el.notes.includes('[PDF UPDATE]')}
                           <span class="block text-xs text-gray-400 mt-0.5">{el.notes}</span>
+                        {:else if el.notes?.includes('[PDF UPDATE]')}
+                          <span class="block text-xs text-amber-500 mt-0.5" title={el.notes}>⚠ PDF update — najet myší</span>
                         {/if}
                       </button>
                     {/if}
