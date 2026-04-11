@@ -72,7 +72,7 @@ async def _extract_map(project):
 
 
 async def _extract_idml(project):
-    """Extrakce textu z IDML souboru."""
+    """Extrakce textu z IDML souboru. Při re-extrakci zachová existující překlady."""
     if not project.idml_path:
         raise HTTPException(422, "No IDML file uploaded. Upload first via /upload-idml")
 
@@ -96,6 +96,27 @@ async def _extract_idml(project):
 
     if not elements:
         raise HTTPException(422, "No text elements found in the IDML file")
+
+    # Při re-extrakci: zachovat existující překlady, notes, status
+    if project.elements:
+        old_by_id = {e.id: e for e in project.elements}
+        preserved = 0
+        for new_el in elements:
+            old_el = old_by_id.get(new_el.id)
+            if old_el:
+                if old_el.czech:
+                    new_el.czech = old_el.czech
+                if old_el.notes:
+                    new_el.notes = old_el.notes
+                if old_el.status:
+                    new_el.status = old_el.status
+                if old_el.category:
+                    new_el.category = old_el.category
+                if old_el.auto_translated:
+                    new_el.auto_translated = old_el.auto_translated
+                preserved += 1
+        logger.info("Re-extrakce IDML: %d/%d elementů zachovalo překlady",
+                    preserved, len(elements))
 
     project.elements = elements
     project.phase = ProjectPhase.EXTRACTED
