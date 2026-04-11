@@ -326,10 +326,7 @@ async def api_corrections_ai(project_id: str, body: dict):
     from core.traces import TraceCollector, get_trace_store
 
     elements_json = json.dumps(elements_for_ai, ensure_ascii=False, indent=2)
-    system = AI_CORRECTION_PROMPT.format(
-        instruction=instruction,
-        elements_json=elements_json,
-    )
+    system = AI_CORRECTION_PROMPT.replace("{instruction}", instruction).replace("{elements_json}", elements_json)
 
     engine = get_engine()
     collector = TraceCollector(engine, get_trace_store(), module="corrections_ai")
