@@ -263,6 +263,40 @@ async def api_corrections_download(project_id: str, round_id: str):
     )
 
 
+def _extract_entries_regex(raw: str) -> list[dict]:
+    """Fallback parser — extrahuje entries z poškozeného JSON pomocí regex.
+
+    Hledá bloky {"element_id": "...", ...} a parsuje je jednotlivě.
+    Zvládne typografické uvozovky a jiné LLM artefakty.
+    """
+    import re
+    entries = []
+    # Najdi všechny {...} bloky
+    for m in re.finditer(r'\{[^{}]+\}', raw):
+        block = m.group()
+        # Zkus parsovat přímo
+        try:
+            entry = json.loads(block)
+            if "element_id" in entry:
+                entries.append(entry)
+            continue
+        except json.JSONDecodeError:
+            pass
+        # Fallback: extrahuj pole regexem
+        eid = re.search(r'"element_id"\s*:\s*"([^"]*)"', block)
+        before = re.search(r'"before"\s*:\s*"((?:[^"\\]|\\.)*)"', block)
+        after = re.search(r'"after"\s*:\s*"((?:[^"\\]|\\.)*)"', block)
+        notes = re.search(r'"notes"\s*:\s*"((?:[^"\\]|\\.)*)"', block)
+        if eid and before and after:
+            entries.append({
+                "element_id": eid.group(1),
+                "before": before.group(1),
+                "after": after.group(1),
+                "notes": notes.group(1) if notes else "",
+            })
+    return entries
+
+
 # ─── AI korekce z volného textu ────────────────────────────
 
 AI_CORRECTION_PROMPT = """Jsi jazykový korektor pro National Geographic Česko.
@@ -284,6 +318,12 @@ Pro každý změněný element vrať JSON objekt s těmito poli:
 
 Vrať JSON pole: [{"element_id": "...", "before": "...", "after": "...", "notes": "..."}]
 Pokud žádný element nevyžaduje změnu, vrať prázdné pole: []
+
+DŮLEŽITÉ: Uvnitř JSON stringů escapuj speciální znaky:
+- Dvojité uvozovky " → \\"
+- Typografické uvozovky „ " " ponech bez escapování (nejsou JSON speciální)
+- Nový řádek → \\n
+
 Pouze JSON, žádný další text."""
 
 
@@ -345,18 +385,34 @@ async def api_corrections_ai(project_id: str, body: dict):
         logger.error("AI korekce selhaly: %s", e)
         raise HTTPException(500, f"Chyba při volání Claude API: {e}")
 
-    # Parse odpovědi
+    # Parse odpovědi — robustní extrakce JSON z LLM výstupu
     raw = result.content.strip()
     start = raw.find("[")
     end = raw.rfind("]")
     if start == -1 or end == -1:
         raise HTTPException(500, "Claude nevrátil platný JSON")
 
+    json_str = raw[start:end + 1]
     try:
-        ai_entries = json.loads(raw[start:end + 1])
-    except json.JSONDecodeError as e:
-        logger.error("AI korekce: neplatný JSON — %s", e)
-        raise HTTPException(500, "Claude vrátil neplatný JSON")
+        ai_entries = json.loads(json_str)
+    except json.JSONDecodeError:
+        # Fallback: vyčistit běžné LLM artefakty a zkusit znovu
+        import re
+        # Odstranit trailing commas před ] nebo }
+        json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
+        # Odstranit komentáře // ...
+        json_str = re.sub(r'//[^\n]*', '', json_str)
+        # Odstranit markdown code fences
+        json_str = re.sub(r'```json?\s*', '', json_str)
+        json_str = re.sub(r'```\s*', '', json_str)
+        try:
+            ai_entries = json.loads(json_str)
+        except json.JSONDecodeError:
+            # Poslední fallback: parsuj po jednotlivých objektech pomocí regex
+            ai_entries = _extract_entries_regex(json_str)
+            if not ai_entries:
+                logger.error("AI korekce: nepodařilo se parsovat JSON\nRaw: %s", json_str[:500])
+                raise HTTPException(500, "Claude vrátil neplatný JSON — zkuste to znovu")
 
     if not ai_entries:
         return {"round_id": None, "entries": [], "stats": {"total": 0, "matched": 0}}
