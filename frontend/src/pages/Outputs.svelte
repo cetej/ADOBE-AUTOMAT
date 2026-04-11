@@ -62,6 +62,45 @@
     loading = '';
   }
 
+  async function downloadFile(url, filename) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Export selhal');
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  async function exportDocx() {
+    loading = 'docx';
+    try {
+      await downloadFile(
+        `/api/projects/${$currentProject.id}/export-docx`,
+        `${$currentProject.id}_translation.docx`
+      );
+      notify('Word dokument exportován', 'success');
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+    loading = '';
+  }
+
+  async function exportMd() {
+    loading = 'md';
+    try {
+      await downloadFile(
+        `/api/projects/${$currentProject.id}/export-md`,
+        `${$currentProject.id}_translation.md`
+      );
+      notify('Markdown exportován', 'success');
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+    loading = '';
+  }
+
   async function exportJson() {
     loading = 'json';
     try {
@@ -137,6 +176,34 @@
           onclick={exportXlsxGrouped}
         >
           {loading === 'xlsx-grouped' ? 'Stahuji...' : 'Stahnout Excel'}
+        </button>
+      </div>
+
+      <div class="bg-white rounded-lg border border-gray-200 p-4 flex items-center justify-between">
+        <div>
+          <div class="font-medium text-gray-900 text-sm">Word dokument (DOCX)</div>
+          <div class="text-xs text-gray-500">Originál + překlad, seskupeno podle sekcí</div>
+        </div>
+        <button
+          class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 transition-colors disabled:opacity-50"
+          disabled={loading === 'docx' || translated === 0}
+          onclick={exportDocx}
+        >
+          {loading === 'docx' ? 'Stahuji...' : 'Stáhnout DOCX'}
+        </button>
+      </div>
+
+      <div class="bg-white rounded-lg border border-gray-200 p-4 flex items-center justify-between">
+        <div>
+          <div class="font-medium text-gray-900 text-sm">Markdown (MD)</div>
+          <div class="text-xs text-gray-500">Originál + překlad v textovém formátu</div>
+        </div>
+        <button
+          class="px-3 py-1.5 bg-gray-600 text-white rounded-lg text-sm hover:bg-gray-700 transition-colors disabled:opacity-50"
+          disabled={loading === 'md' || translated === 0}
+          onclick={exportMd}
+        >
+          {loading === 'md' ? 'Stahuji...' : 'Stáhnout MD'}
         </button>
       </div>
 
