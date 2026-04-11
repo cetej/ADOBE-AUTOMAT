@@ -135,6 +135,92 @@ async def api_writeback_map_preview(project_id: str):
     return preview_map(project.elements)
 
 
+@router.get("/api/projects/{project_id}/export-docx")
+async def api_export_docx(project_id: str):
+    """Exportuje překlad jako Word dokument (.docx)."""
+    from docx import Document
+    from docx.shared import Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    project = get_project(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    doc = Document()
+    doc.add_heading(project.name, level=1)
+    doc.add_paragraph(f"Překlad — {project.id}")
+
+    # Seskup elementy podle story/layer
+    current_group = None
+    for elem in project.elements:
+        if not elem.czech:
+            continue
+
+        group = elem.story_id or elem.layer_name or "other"
+        if group != current_group:
+            current_group = group
+            doc.add_heading(group, level=2)
+
+        p = doc.add_paragraph()
+        # Originál šedě
+        run_en = p.add_run(f"[{elem.id}] {elem.contents or ''}")
+        run_en.font.size = Pt(8)
+        run_en.font.color.rgb = RGBColor(150, 150, 150)
+        p.add_run("\n")
+        # Překlad černě
+        run_cz = p.add_run(elem.czech)
+        run_cz.font.size = Pt(11)
+
+    export_dir = EXPORTS_DIR / project_id
+    export_dir.mkdir(parents=True, exist_ok=True)
+    docx_path = export_dir / f"{project_id}_translation.docx"
+    doc.save(str(docx_path))
+
+    return FileResponse(
+        path=str(docx_path),
+        filename=docx_path.name,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+
+@router.get("/api/projects/{project_id}/export-md")
+async def api_export_md(project_id: str):
+    """Exportuje překlad jako Markdown dokument (.md)."""
+    project = get_project(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    lines = [f"# {project.name}", f"", f"Překlad — {project.id}", ""]
+
+    current_group = None
+    for elem in project.elements:
+        if not elem.czech:
+            continue
+
+        group = elem.story_id or elem.layer_name or "other"
+        if group != current_group:
+            current_group = group
+            lines.append(f"## {group}")
+            lines.append("")
+
+        lines.append(f"**[{elem.id}]** _{elem.contents or ''}_")
+        lines.append(f"{elem.czech}")
+        lines.append("")
+
+    md_content = "\n".join(lines)
+
+    export_dir = EXPORTS_DIR / project_id
+    export_dir.mkdir(parents=True, exist_ok=True)
+    md_path = export_dir / f"{project_id}_translation.md"
+    md_path.write_text(md_content, encoding="utf-8")
+
+    return FileResponse(
+        path=str(md_path),
+        filename=md_path.name,
+        media_type="text/markdown",
+    )
+
+
 @router.get("/api/projects/{project_id}/download/{export_key}")
 async def api_download_export(project_id: str, export_key: str):
     """Stahne exportovany soubor."""

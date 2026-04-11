@@ -166,6 +166,7 @@ Elementy jsou KRÁTKÉ — typicky 1–15 slov: popisky map, nadpisy, legendy, d
 ## TYPOGRAFIE
 - České uvozovky: „text" (ne "text")
 - Pomlčka v rozsazích: 1990–2000 (ne 1990-2000)
+- Interpunkční pomlčka: VŽDY en-dash (–), NIKDY em-dash (—). Čeština používá – s mezerami: „text – pokračování"
 - Procenta: 50 % (mezera před %)
 - Jednotky: 5 km, 3 °C (mezera před jednotkou)
 - Nedělitelná mezera za jednopísmennými předložkami: k, s, v, z, o, u

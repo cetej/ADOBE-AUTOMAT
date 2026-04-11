@@ -157,7 +157,8 @@ def _run_translation(project_id, elements, project_type, model, backgrounder, ov
         applied = 0
         for elem in project.elements:
             if elem.id in result_map:
-                elem.czech = result_map[elem.id]
+                # Post-processing: em-dash → en-dash (česká typografie)
+                elem.czech = result_map[elem.id].replace("\u2014", "\u2013")
                 elem.auto_translated = True
                 if not elem.status:
                     elem.status = TextStatus.OVERIT

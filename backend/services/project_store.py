@@ -81,10 +81,14 @@ def create_project(req: ProjectCreate) -> Project:
 def save_project(project: Project) -> None:
     """Ulozi projekt na disk. Stripne pipeline markery z elem.czech."""
     project.updated_at = datetime.now().isoformat()
-    # Defence-in-depth: nikdy neuložit pipeline markery na disk
+    # Defence-in-depth: nikdy neuložit pipeline markery na disk + česká typografie
     for elem in project.elements:
-        if elem.czech and '<!--[' in elem.czech:
-            elem.czech = strip_pipeline_markers(elem.czech)
+        if elem.czech:
+            if '<!--[' in elem.czech:
+                elem.czech = strip_pipeline_markers(elem.czech)
+            # Em-dash → en-dash (česká typografie)
+            if '\u2014' in elem.czech:
+                elem.czech = elem.czech.replace('\u2014', '\u2013')
     path = _project_path(project.id)
     path.write_text(
         project.model_dump_json(indent=2),
