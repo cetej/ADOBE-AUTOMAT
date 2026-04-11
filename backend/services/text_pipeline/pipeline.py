@@ -20,6 +20,7 @@ from .phases import (
     StylisticEditor,
     format_termdb_for_prompt,
     detect_domains_from_text,
+    sanitize_article_text,
 )
 from .findings_ledger import (
     load_findings_ledger,
@@ -86,6 +87,22 @@ PHASE_NAMES = {
     5: "Jazyk a kontext",
     6: "Stylistika",
 }
+
+
+def _store_corrector_suggestions(project_dir: Path, suggestions: list) -> None:
+    """Uloží návrhy CzechCorrectoru jako JSON do projektu (pro Phase 5 kontext)."""
+    try:
+        import json
+        path = project_dir / "corrector_suggestions.json"
+        data = [
+            {"type": s.type, "original": s.original,
+             "corrected": s.corrected, "rule": s.rule}
+            for s in suggestions
+        ]
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("CzechCorrector: %d návrhů uloženo do %s", len(data), path.name)
+    except Exception as e:
+        logger.debug("Nelze uložit návrhy korektoru: %s", e)
 
 
 class TextPipeline:
@@ -159,8 +176,8 @@ class TextPipeline:
                 )
 
                 if phase_result.success and phase_result.content:
-                    # Aktualizuj text pro další fázi
-                    current_text = phase_result.content
+                    # Sanitizuj výstup — odstraň reasoning, protokolové hlavičky, findings echo
+                    current_text = sanitize_article_text(phase_result.content)
 
                     # Aktualizuj findings ledger
                     update_findings_ledger(project_dir, phase, phase_result.content)
@@ -201,22 +218,27 @@ class TextPipeline:
                         "error": str(e),
                     })
 
-        # Phase 4.5: CzechCorrector (deterministický, běží vždy)
+        # Phase 4.5: CzechCorrector (deterministický, běží vždy po ostatních fázích)
         if _CORRECTOR_AVAILABLE:
+            from services.translation_service import get_protected_terms_cached
+            protected = get_protected_terms_cached()
             try:
-                corrector = CzechCorrector()
-                corrector_result = corrector.correct(
-                    current_text,
-                    fix_typography=True,
-                    check_spelling=False,
-                    check_rules=False,
-                )
+                with CzechCorrector(protected_terms=protected) as corrector:
+                    corrector_result = corrector.correct(
+                        current_text,
+                        fix_typography=True,
+                        check_spelling=False,
+                        check_rules=True,
+                    )
                 if corrector_result.auto_count > 0:
                     current_text = corrector_result.text
-                    logger.info(f"Phase 4.5 CzechCorrector: {corrector_result.auto_count} oprav")
-                corrector.close()
+                    logger.info("Phase 4.5 CzechCorrector: %d oprav", corrector_result.auto_count)
+                if hasattr(corrector_result, 'suggestion_count') and corrector_result.suggestion_count > 0:
+                    logger.info("Phase 4.5 CzechCorrector návrhy: %d — %s",
+                                corrector_result.suggestion_count, corrector_result.summary())
+                    _store_corrector_suggestions(project_dir, corrector_result.suggestions)
             except Exception as e:
-                logger.warning(f"CzechCorrector: {e}")
+                logger.warning("CzechCorrector: %s", e)
 
         # Rozdělit zpět na elementy
         updated_texts = ElementMerger.split_back(current_text, project.elements)

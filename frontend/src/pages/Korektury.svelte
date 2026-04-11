@@ -2,10 +2,13 @@
   import { currentProject } from '../stores/project.js';
   import { api } from '../lib/api.js';
 
-  let inputMode = $state('upload'); // 'upload' | 'manual'
+  let inputMode = $state('upload'); // 'upload' | 'manual' | 'ai'
   let loading = $state(false);
   let error = $state('');
-  let success = $state('');
+  let success = '';
+
+  // AI corrections state
+  let aiInstruction = $state('');
 
   // Upload state
   let dragOver = $state(false);
@@ -124,6 +127,59 @@
     }
   }
 
+  // ─── AI corrections ─────────────────────────────────────
+
+  async function submitAi() {
+    if (!aiInstruction.trim()) {
+      error = 'Napište instrukci pro korektora';
+      return;
+    }
+
+    loading = true;
+    error = '';
+    success = '';
+    try {
+      const result = await api.correctionsAi($currentProject.id, aiInstruction.trim());
+      if (!result.round_id) {
+        success = 'Žádné elementy nevyžadují změnu podle této instrukce.';
+      } else {
+        previewRoundId = result.round_id;
+        previewEntries = result.entries || [];
+        previewStats = result.stats;
+        previewFile = result.source_file || `AI: ${aiInstruction.slice(0, 40)}`;
+        success = `AI navrhuje ${previewEntries.length} oprav`;
+      }
+    } catch (e) {
+      error = e.message || 'AI korekce selhaly';
+    } finally {
+      loading = false;
+    }
+  }
+
+  // ─── Auto-suggestions (CzechCorrector) ─────────────────
+
+  async function runAutoSuggestions() {
+    loading = true;
+    error = '';
+    success = '';
+    try {
+      const result = await api.correctionsAutoSuggestions($currentProject.id);
+      if (!result.round_id) {
+        success = 'Korektor nenašel žádné problémy.';
+      } else {
+        previewRoundId = result.round_id;
+        previewEntries = result.entries || [];
+        previewStats = result.stats;
+        previewFile = result.source_file || 'CzechCorrector (auto)';
+        success = `Korektor navrhuje ${previewEntries.length} oprav (${result.stats?.typography || 0} typografie, ${result.stats?.suggestions || 0} jazykové)`;
+      }
+    } catch (e) {
+      error = e.message || 'Auto-kontrola selhala';
+    } finally {
+      loading = false;
+    }
+  }
+
   // ─── Apply ──────────────────────────────────────────────
 
   async function applyRound() {
@@ -183,9 +239,9 @@
   <div class="max-w-6xl mx-auto space-y-6">
 
     <!-- ─── Header ─────────────────────────────────── -->
-    <div class="flex items-center justify-between">
+    <div class="space-y-3">
       <h2 class="text-xl font-semibold text-gray-900">Korektury</h2>
-      <div class="flex gap-2">
+      <div class="flex items-center gap-2">
         <button
           class="px-3 py-1.5 text-sm rounded-full transition-colors
                  {inputMode === 'upload' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}"
@@ -199,6 +255,21 @@
           onclick={() => { inputMode = 'manual'; previewRoundId = null; }}
         >
           Ručně
+        </button>
+        <button
+          class="px-3 py-1.5 text-sm rounded-full transition-colors
+                 {inputMode === 'ai' ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}"
+          onclick={() => { inputMode = 'ai'; previewRoundId = null; }}
+        >
+          AI korekce
+        </button>
+        <span class="border-l border-gray-300 h-5 mx-1"></span>
+        <button
+          class="px-3 py-1.5 text-sm rounded-full bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors disabled:opacity-50"
+          onclick={runAutoSuggestions}
+          disabled={loading}
+        >
+          {loading && inputMode !== 'ai' ? 'Analyzuji...' : 'Návrhy korektoru'}
         </button>
       </div>
     </div>
@@ -289,6 +360,36 @@
       </div>
     {/if}
 
+    <!-- ─── AI corrections mode ─────────────────────── -->
+    {#if inputMode === 'ai' && !previewRoundId}
+      <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div class="px-4 py-3 bg-purple-50 border-b border-purple-200">
+          <span class="text-sm font-medium text-purple-800">AI korekce</span>
+          <span class="text-xs text-purple-600 ml-2">Napište instrukci a Claude ji aplikuje na přeložené texty</span>
+        </div>
+        <div class="p-4 space-y-3">
+          <textarea
+            class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm resize-none focus:border-purple-400 focus:ring-1 focus:ring-purple-200"
+            rows="3"
+            placeholder="Napište instrukci, např.: 'Všude kde je realizovat změň na uskutečnit' nebo 'Název města má být Vídeň, ne Vienna' nebo 'Zkontroluj správnost datací'"
+            bind:value={aiInstruction}
+          ></textarea>
+          <div class="flex items-center justify-between">
+            <p class="text-xs text-gray-400">
+              Analyzuje {$currentProject?.elements?.filter(e => e.czech).length || 0} přeložených elementů
+            </p>
+            <button
+              class="px-4 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
+              onclick={submitAi}
+              disabled={loading || !aiInstruction.trim()}
+            >
+              {loading ? 'Claude analyzuje...' : 'Spustit AI korekce'}
+            </button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
     <!-- ─── Preview ────────────────────────────────── -->
     {#if previewRoundId && previewEntries.length > 0}
       <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
@@ -332,6 +433,7 @@
               <tr>
                 <th class="text-left px-3 py-2 text-gray-600 font-medium">Původní text</th>
                 <th class="text-left px-3 py-2 text-gray-600 font-medium">Oprava</th>
+                <th class="text-left px-3 py-2 text-gray-600 font-medium w-40">Poznámka</th>
                 <th class="text-center px-3 py-2 text-gray-600 font-medium w-20">Shoda</th>
               </tr>
             </thead>
@@ -343,6 +445,9 @@
                   </td>
                   <td class="px-3 py-2 text-gray-900 max-w-sm">
                     <span class="line-clamp-2">{entry.after}</span>
+                  </td>
+                  <td class="px-3 py-2 text-xs text-gray-500 max-w-[10rem] truncate">
+                    {entry.notes || ''}
                   </td>
                   <td class="px-3 py-2 text-center">
                     <span class="inline-block px-2 py-0.5 rounded text-xs font-medium {confidenceColor(entry.confidence)}">

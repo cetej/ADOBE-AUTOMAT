@@ -24,14 +24,85 @@ logger = logging.getLogger(__name__)
 # Cesty k prompt souborům — zkopírované z NG-ROBOT projects/
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 
+
+# === Sanitizace výstupu — brání prosakování reasoning/metadat do článku ===
+
+# Protokolové hlavičky, které model generuje ale nepatří do textu
+_PROTOCOL_HEADERS = (
+    "PROVEDENÉ DOPLNĚNÍ A OPRAVY", "PROVEDENÉ DOPLNĚNÍ", "PROVEDENÉ OPRAVY",
+    "TERMINOLOGICKÉ OPRAVY", "FAKTICKÉ OPRAVY", "JAZYKOVÉ A KONTEXTOVÉ OPRAVY",
+    "STYLISTICKÉ ÚPRAVY", "VERIFICATION LOG", "SHRNUTÍ OPRAV", "SHRNUTÍ",
+    "ZJIŠTĚNÍ Z PŘEDCHOZÍCH FÁZÍ", "OVĚŘENÉ TERMÍNY", "AUDIT STATISTIKY",
+    "POCHYBNÁ FAKTA K OVĚŘENÍ", "OPRAVENÝ TEXT ČLÁNKU",
+)
+
+# Reasoning fráze (CZ/EN), které model občas vmíchá do textu
+_REASONING_PATTERNS = [
+    r"^(?:Nyní|Nejprve|Mám dostatek|Klíčová oprava|Sestavím|Provedu|Zkontrol).*$",
+    r"^(?:Now I|Let me|I'll|I need to|I have enough|Key correction).*$",
+    r"^---+\s*$",  # samotné oddělovače
+]
+
+
+def sanitize_article_text(text: str) -> str:
+    """Odstraní reasoning, protokolové hlavičky a metadata z textu článku.
+
+    Inspirováno NG-ROBOT core.py:sanitize_article_text() — defence-in-depth
+    proti prosakování interních poznámek modelu do výstupu pipeline.
+    """
+    if not text:
+        return text
+
+    # 1. Odstraň protokolové sekce (## FAKTICKÉ OPRAVY ... až do dalšího ## nebo konce)
+    for header in _PROTOCOL_HEADERS:
+        text = re.sub(
+            rf'^## {re.escape(header)}.*?(?=\n## [A-ZÁČĎĚÍŇÓŘŠŤÚŮÝŽ]|\Z)',
+            '', text, flags=re.MULTILINE | re.DOTALL
+        )
+
+    # 2. Odstraň findings ledger echo
+    text = re.sub(
+        r'------ZJIŠTĚNÍ Z PŘEDCHOZÍCH FÁZÍ.*?(?=<!--\[elem-|\Z)',
+        '', text, flags=re.DOTALL
+    )
+    text = re.sub(
+        r'---\s*\n\s*ZJIŠTĚNÍ Z PŘEDCHOZÍCH FÁZÍ.*?(?=<!--\[elem-|\Z)',
+        '', text, flags=re.DOTALL
+    )
+
+    # 3. Odstraň inline reasoning fráze
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        skip = False
+        for pattern in _REASONING_PATTERNS:
+            if re.match(pattern, line.strip()):
+                # Ale zachovej pokud je uvnitř elementu (legitimní text článku)
+                if '<!--[elem-' not in line and '<!--[/elem-' not in line:
+                    skip = True
+                    break
+        if not skip:
+            cleaned_lines.append(line)
+    text = '\n'.join(cleaned_lines)
+
+    # 4. Odstraň PATCH syntax pokud pronikla do textu
+    text = re.sub(r'^### PATCH \d+:.*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^(?:REPLACE|WITH|INSERT|DELETE|AFTER|END_PATCH):.*$', '', text, flags=re.MULTILINE)
+
+    # 5. Collapse prázdné řádky (max 2 za sebou)
+    text = re.sub(r'\n{4,}', '\n\n\n', text)
+
+    return text.strip()
+
 # --- Terminologické utility ---
 
 # Graceful import ngm-terminology — JEDINÝ ZDROJ: termdb.db (246K+ termínů)
 try:
     from ngm_terminology import NormalizedTermDB
+    from config import MULTI_DOMAIN_DB_PATH
     _main_db = None
 
-    _main_db_path = Path(r"C:\Users\stock\Documents\000_NGM\BIOLIB\termdb.db")
+    _main_db_path = Path(MULTI_DOMAIN_DB_PATH)
     if _main_db_path.exists():
         try:
             _main_db = NormalizedTermDB(str(_main_db_path))
@@ -571,52 +642,125 @@ DŮLEŽITÉ: NEREPRODUKUJ celý článek. Vrať JEN tabulky."""
         finally:
             self.DISABLE_THINKING, self.EFFORT, self.MAX_TOKENS = saved
 
-    def _verify_and_apply(self, article_content: str, audit_table: str) -> ProcessingResult:
-        """Call 2 (Verify & Apply): web search + aplikace oprav."""
-        instruction = f"""TVÝM ÚKOLEM JE OVĚŘIT POCHYBNÁ FAKTA A APLIKOVAT OPRAVY.
+    PATCH_INSTRUCTION = """
+⚠️ NEREPRODUKUJ CELÝ ČLÁNEK! Vrať POUZE PATCH — seznam oprav.
 
-## AUDIT:
+FORMÁT VÝSTUPU — PATCH BLOKY:
+
+### PATCH 1: [popis opravy]
+REPLACE: [přesná citace chybného textu z článku, min. 20 znaků, UNIKÁTNÍ v textu]
+WITH: [opravený text]
+END_PATCH
+
+### PATCH 2: [popis]
+REPLACE: [přesná citace]
+WITH: [oprava]
+END_PATCH
+
+Pokud žádné opravy nejsou potřeba, vrať:
+### NO PATCHES
+Žádné faktické chyby nenalezeny.
+
+## SHRNUTÍ
+- Počet oprav: X
+"""
+
+    def _verify_and_apply(self, article_content: str, audit_table: str) -> ProcessingResult:
+        """Call 2 (Verify): web search → PATCH bloky (model NEREPRODUKUJE článek)."""
+        instruction = f"""TVÝM ÚKOLEM JE OVĚŘIT POCHYBNÁ FAKTA A VRÁTIT OPRAVY JAKO PATCH BLOKY.
+
+## AUDIT (výsledky z Call 1):
 {audit_table}
 
 ---
 
-## TEXT K OPRAVĚ:
+## ČLÁNEK (pouze pro referenci — NEREPRODUKUJ ho):
 {article_content}
 
 ---
 
 ## INSTRUKCE:
-1. Ověř pochybná fakta web searchem
-2. Aplikuj VŠECHNY převody jednotek z tabulky
-3. Aplikuj ověřené faktické opravy
-4. ZACHOVEJ VŠECHNY <!--[elem-...]--> značky!
-5. NIKDY nezkracuj text
+1. Ověř pochybná fakta z tabulky web searchem
+2. Pro každý potvrzený problém (špatný fakt, chybějící převod jednotek) vytvoř PATCH
+3. REPLACE musí být přesná citace z článku (min. 20 znaků, unikátní)
+4. Ignoruj <!--[elem-...]--> značky v citacích — jsou součástí textu
+5. NIKDY nereprodukuj celý článek
 
-## VÝSTUP:
-1. KOMPLETNÍ TEXT s opravami
-2. Na konci:
-## FAKTICKÉ OPRAVY
-| # | Typ | Původní text | Oprava | Důvod | Zdroj |
-|---|---|---|---|---|---|"""
+{self.PATCH_INSTRUCTION}"""
 
         verify_tools = [
             {"type": "web_search_20260209", "name": "web_search", "max_uses": self.FACT_SEARCH_MAX_USES}
         ]
 
-        # Adaptivní MAX_TOKENS
         saved_max = self.MAX_TOKENS
-        if len(article_content) > 20000:
-            self.MAX_TOKENS = 48000
+        self.MAX_TOKENS = 16000  # PATCH bloky jsou malé
 
         try:
-            logger.info("[Phase 4 Call 2/2] Verify & Apply: web search + reprodukce")
+            logger.info("[Phase 4 Call 2/2] Verify: web search → PATCH bloky")
             return self.process(
                 content=instruction,
-                system_prompt="Jsi faktický korektor. Ověřuješ fakta web searchem a aplikuješ opravy. ZACHOVEJ <!--[elem-...]--> značky. NIKDY nezkracuj text.",
+                system_prompt="Jsi faktický korektor. Ověřuješ fakta web searchem. NIKDY nereprodukuj celý článek. Výstup = POUZE PATCH bloky.",
                 tools=verify_tools
             )
         finally:
             self.MAX_TOKENS = saved_max
+
+    @staticmethod
+    def _apply_patches(original_text: str, patch_output: str) -> tuple[str, list[dict]]:
+        """Deterministicky aplikuje PATCH bloky na originální text.
+
+        Returns:
+            (patched_text, report) — report = [{"patch": N, "desc": ..., "status": "applied"|"skipped"}]
+        """
+        text = original_text
+        report = []
+
+        # Rozděl na jednotlivé PATCH bloky
+        patches = re.split(r'### PATCH \d+:', patch_output)
+
+        for i, patch_block in enumerate(patches[1:], 1):
+            lines = patch_block.strip().split('\n')
+            desc = lines[0].strip() if lines else f"Patch {i}"
+
+            # Parse REPLACE/WITH
+            replace_match = re.search(
+                r'REPLACE:\s*(.+?)(?:\nWITH:\s*(.+?))?(?:\nEND_PATCH|$)',
+                patch_block, re.DOTALL
+            )
+
+            if not replace_match:
+                report.append({"patch": i, "desc": desc, "status": "skipped", "reason": "parse error"})
+                continue
+
+            old_text = replace_match.group(1).strip()
+            new_text = (replace_match.group(2) or "").strip()
+
+            if not old_text:
+                report.append({"patch": i, "desc": desc, "status": "skipped", "reason": "empty REPLACE"})
+                continue
+
+            # Aplikuj — přesný string replace (max 1 výskyt)
+            if old_text in text:
+                text = text.replace(old_text, new_text, 1)
+                report.append({"patch": i, "desc": desc, "status": "applied"})
+                logger.info("PATCH %d applied: %s", i, desc)
+            else:
+                # Zkus fuzzy — ignoruj whitespace rozdíly
+                normalized_old = re.sub(r'\s+', ' ', old_text)
+                normalized_text = re.sub(r'\s+', ' ', text)
+                if normalized_old in normalized_text:
+                    # Najdi pozici v originálním textu
+                    pos = normalized_text.find(normalized_old)
+                    # Rekonstruuj boundaries v originálním textu
+                    # (jednoduchý přístup — nahraď v normalizovaném a reconstruct)
+                    text = text.replace(old_text.split()[0], new_text.split()[0] if new_text else "", 1)
+                    report.append({"patch": i, "desc": desc, "status": "applied-fuzzy"})
+                    logger.info("PATCH %d applied (fuzzy): %s", i, desc)
+                else:
+                    report.append({"patch": i, "desc": desc, "status": "skipped", "reason": "not found"})
+                    logger.warning("PATCH %d skipped (not found): '%s...'", i, old_text[:50])
+
+        return text, report
 
     def check_facts(self, article_content: str) -> ProcessingResult:
         """Zkontroluje fakta (Audit → Verify & Apply)."""
@@ -644,38 +788,45 @@ DŮLEŽITÉ: NEREPRODUKUJ celý článek. Vrať JEN tabulky."""
                 output_tokens=audit_result.output_tokens,
             )
 
-        # Call 2: Verify & Apply
-        apply_result = self._verify_and_apply(article_content, audit_table)
-        if not apply_result.success:
-            logger.warning(f"Verify & Apply selhal — fallback na původní text")
+        # Call 2: Verify → PATCH bloky
+        patch_result = self._verify_and_apply(article_content, audit_table)
+        if not patch_result.success:
+            logger.warning("Verify selhal — fallback na původní text")
             return ProcessingResult(
                 success=True, content=article_content,
-                tokens_used=(audit_result.tokens_used or 0) + (apply_result.tokens_used or 0),
-                input_tokens=(audit_result.input_tokens or 0) + (apply_result.input_tokens or 0),
-                output_tokens=(audit_result.output_tokens or 0) + (apply_result.output_tokens or 0),
+                tokens_used=(audit_result.tokens_used or 0) + (patch_result.tokens_used or 0),
+                input_tokens=(audit_result.input_tokens or 0) + (patch_result.input_tokens or 0),
+                output_tokens=(audit_result.output_tokens or 0) + (patch_result.output_tokens or 0),
             )
 
-        # Fragment check
-        if len(apply_result.content) < len(article_content) * 0.5:
-            logger.warning("Apply vrátil fragment — fallback")
-            return ProcessingResult(
-                success=True, content=article_content,
-                tokens_used=(audit_result.tokens_used or 0) + (apply_result.tokens_used or 0),
-                input_tokens=(audit_result.input_tokens or 0) + (apply_result.input_tokens or 0),
-                output_tokens=(audit_result.output_tokens or 0) + (apply_result.output_tokens or 0),
-            )
+        # Deterministická aplikace PATCH bloků na originální text
+        raw_patches = patch_result.content
+        if "### NO PATCHES" in raw_patches or "### PATCH" not in raw_patches:
+            # Žádné opravy — vrať originál
+            logger.info("Phase 4: žádné PATCH bloky — text beze změn")
+            patched_text = article_content
+            patch_report = []
+        else:
+            patched_text, patch_report = self._apply_patches(article_content, raw_patches)
+            applied_count = sum(1 for p in patch_report if "applied" in p.get("status", ""))
+            skipped_count = sum(1 for p in patch_report if p.get("status") == "skipped")
+            logger.info("Phase 4 PATCH: %d applied, %d skipped", applied_count, skipped_count)
 
-        total_tokens = (audit_result.tokens_used or 0) + (apply_result.tokens_used or 0)
-        total_input = (audit_result.input_tokens or 0) + (apply_result.input_tokens or 0)
-        total_output = (audit_result.output_tokens or 0) + (apply_result.output_tokens or 0)
-        all_searches = (audit_result.web_searches or []) + (apply_result.web_searches or [])
+        total_tokens = (audit_result.tokens_used or 0) + (patch_result.tokens_used or 0)
+        total_input = (audit_result.input_tokens or 0) + (patch_result.input_tokens or 0)
+        total_output = (audit_result.output_tokens or 0) + (patch_result.output_tokens or 0)
+        all_searches = (audit_result.web_searches or []) + (patch_result.web_searches or [])
 
         return ProcessingResult(
-            success=True, content=apply_result.content,
+            success=True, content=patched_text,
             tokens_used=total_tokens, input_tokens=total_input,
-            output_tokens=total_output, truncated=apply_result.truncated,
+            output_tokens=total_output, truncated=patch_result.truncated,
             web_searches=all_searches,
-            artifacts={"audit_table": audit_table}
+            artifacts={
+                "audit_table": audit_table,
+                "raw_patches": raw_patches,
+                "patch_report": patch_report,
+            }
         )
 
 

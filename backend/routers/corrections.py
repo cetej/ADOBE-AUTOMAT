@@ -3,6 +3,8 @@
 import sys
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+import asyncio
+import json
 import logging
 from pathlib import Path
 from dataclasses import asdict
@@ -259,3 +261,250 @@ async def api_corrections_download(project_id: str, round_id: str):
         filename=path.name,
         media_type="application/octet-stream",
     )
+
+
+# ─── AI korekce z volného textu ────────────────────────────
+
+AI_CORRECTION_PROMPT = """Jsi jazykový korektor pro National Geographic Česko.
+Dostaneš seznam přeložených textových elementů (id + český text) a instrukci od editora.
+
+Instrukce editora:
+{instruction}
+
+## Elementy k revizi:
+{elements_json}
+
+## Úkol:
+Projdi elementy a aplikuj instrukci editora. Vrať POUZE elementy, které se mění.
+Pro každý změněný element vrať JSON objekt s těmito poli:
+- "element_id": ID elementu
+- "before": původní český text (přesná kopie)
+- "after": opravený český text
+- "notes": stručné vysvětlení změny (max 10 slov)
+
+Vrať JSON pole: [{"element_id": "...", "before": "...", "after": "...", "notes": "..."}]
+Pokud žádný element nevyžaduje změnu, vrať prázdné pole: []
+Pouze JSON, žádný další text."""
+
+
+@router.post("/api/projects/{project_id}/corrections/ai")
+async def api_corrections_ai(project_id: str, body: dict):
+    """AI korekce z volného textu — editor napíše instrukci, Claude ji aplikuje.
+
+    Body: {"instruction": "všude kde je 'realizovat' změň na 'uskutečnit'"}
+    """
+    project = get_project(project_id)
+    if not project:
+        raise HTTPException(404, "Projekt nenalezen")
+
+    instruction = (body.get("instruction") or "").strip()
+    if not instruction:
+        raise HTTPException(400, "Chybí instrukce pro korektora")
+
+    # Připrav elementy s českým textem
+    elements_for_ai = []
+    for el in project.elements:
+        if el.czech:
+            elements_for_ai.append({"id": el.id, "czech": el.czech})
+
+    if not elements_for_ai:
+        raise HTTPException(400, "Žádné přeložené elementy k revizi")
+
+    # Omez na max 200 elementů aby prompt nebyl příliš velký
+    if len(elements_for_ai) > 200:
+        elements_for_ai = elements_for_ai[:200]
+        logger.warning("AI korekce: omezeno na 200 elementů (projekt má %d)",
+                        len([e for e in project.elements if e.czech]))
+
+    # Claude API call
+    from services.translation_service import get_api_key
+    api_key = get_api_key()
+    if not api_key:
+        raise HTTPException(400, "ANTHROPIC_API_KEY není nastaven")
+
+    from core.engine import get_engine
+    from core.traces import TraceCollector, get_trace_store
+
+    elements_json = json.dumps(elements_for_ai, ensure_ascii=False, indent=2)
+    system = AI_CORRECTION_PROMPT.format(
+        instruction=instruction,
+        elements_json=elements_json,
+    )
+
+    engine = get_engine()
+    collector = TraceCollector(engine, get_trace_store(), module="corrections_ai")
+
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: collector.generate(
+                messages=[{"role": "user", "content": f"Aplikuj instrukci: {instruction}"}],
+                model="claude-sonnet-4-6",
+                system=system,
+                max_tokens=4096,
+            )
+        )
+    except Exception as e:
+        logger.error("AI korekce selhaly: %s", e)
+        raise HTTPException(500, f"Chyba při volání Claude API: {e}")
+
+    # Parse odpovědi
+    raw = result.content.strip()
+    start = raw.find("[")
+    end = raw.rfind("]")
+    if start == -1 or end == -1:
+        raise HTTPException(500, "Claude nevrátil platný JSON")
+
+    try:
+        ai_entries = json.loads(raw[start:end + 1])
+    except json.JSONDecodeError as e:
+        logger.error("AI korekce: neplatný JSON — %s", e)
+        raise HTTPException(500, "Claude vrátil neplatný JSON")
+
+    if not ai_entries:
+        return {"round_id": None, "entries": [], "stats": {"total": 0, "matched": 0}}
+
+    # Převeď na CorrectionEntry
+    entries = []
+    for ae in ai_entries:
+        entries.append(CorrectionEntry(
+            element_id=ae.get("element_id", ""),
+            before=ae.get("before", ""),
+            after=ae.get("after", ""),
+            source="ai",
+            confidence=1.0,
+            notes=ae.get("notes"),
+        ))
+
+    # Match a validace (pro případ že Claude vrátil špatné element_id)
+    matched = match_corrections(entries, project.elements)
+
+    # Ulož kolo
+    rid = next_round_id(project_id)
+    round_data = CorrectionRound(
+        round_id=rid,
+        source_file=f"AI: {instruction[:80]}",
+        source_type="ai",
+        entries=matched,
+        applied=False,
+    )
+    save_round(project_id, round_data)
+
+    project.corrections.append(rid)
+    project.current_correction_round = len(project.corrections)
+    save_project(project)
+
+    return {
+        "round_id": rid,
+        "source_file": f"AI: {instruction[:80]}",
+        "entries": [asdict(e) for e in matched],
+        "stats": {
+            "total": len(matched),
+            "matched": sum(1 for e in matched if e.element_id),
+            "unmatched": sum(1 for e in matched if not e.element_id),
+        }
+    }
+
+
+# ─── CzechCorrector auto-suggestions ──────────────────────
+
+@router.post("/api/projects/{project_id}/corrections/auto-suggestions")
+async def api_corrections_auto_suggestions(project_id: str):
+    """Spustí CzechCorrector na přeložených elementech a vytvoří kolo návrhů.
+
+    Detekuje anglicismy, false friends, typografické chyby.
+    Vrací preview — editor potvrdí aplikaci přes /apply.
+    """
+    project = get_project(project_id)
+    if not project:
+        raise HTTPException(404, "Projekt nenalezen")
+
+    # Import CzechCorrector
+    try:
+        from ngm_terminology.corrector import CzechCorrector
+    except ImportError:
+        raise HTTPException(501, "CzechCorrector není nainstalován (ngm_terminology)")
+
+    from services.translation_service import get_protected_terms_cached
+    protected = get_protected_terms_cached()
+
+    elements_with_czech = [el for el in project.elements if el.czech]
+    if not elements_with_czech:
+        raise HTTPException(400, "Žádné přeložené elementy k analýze")
+
+    # Spusť korektor na každém elementu
+    entries = []
+    try:
+        with CzechCorrector(protected_terms=protected) as corrector:
+            for el in elements_with_czech:
+                result_c = corrector.correct(
+                    el.czech,
+                    fix_typography=True,
+                    check_spelling=False,
+                    check_rules=True,
+                )
+                # Typografické auto-opravy
+                if result_c.auto_count > 0 and result_c.text != el.czech:
+                    entries.append(CorrectionEntry(
+                        element_id=el.id,
+                        before=el.czech,
+                        after=result_c.text,
+                        source="corrector",
+                        confidence=1.0,
+                        notes=f"Typografie: {result_c.auto_count} oprav",
+                    ))
+                # Návrhy (anglicismy, false friends)
+                if hasattr(result_c, 'suggestions'):
+                    for s in result_c.suggestions:
+                        if hasattr(s, 'corrected') and s.corrected:
+                            # Aplikuj návrh do textu
+                            fixed = el.czech.replace(s.original, s.corrected) if s.original else el.czech
+                            if fixed != el.czech:
+                                entries.append(CorrectionEntry(
+                                    element_id=el.id,
+                                    before=el.czech,
+                                    after=fixed,
+                                    source="corrector",
+                                    confidence=0.9,
+                                    notes=f"{s.type}: {s.rule}" if hasattr(s, 'rule') else s.type,
+                                ))
+    except Exception as e:
+        logger.error("CzechCorrector selhal: %s", e)
+        raise HTTPException(500, f"CzechCorrector selhal: {e}")
+
+    if not entries:
+        return {"round_id": None, "entries": [], "stats": {"total": 0}}
+
+    # Deduplikuj — pokud stejný element má typografii i návrh, ponech jen ten s větší změnou
+    seen = {}
+    for entry in entries:
+        existing = seen.get(entry.element_id)
+        if not existing or len(entry.after) != len(existing.after):
+            seen[entry.element_id] = entry
+    deduped = list(seen.values())
+
+    # Ulož kolo
+    rid = next_round_id(project_id)
+    round_data = CorrectionRound(
+        round_id=rid,
+        source_file="CzechCorrector (auto)",
+        source_type="corrector",
+        entries=deduped,
+        applied=False,
+    )
+    save_round(project_id, round_data)
+
+    project.corrections.append(rid)
+    project.current_correction_round = len(project.corrections)
+    save_project(project)
+
+    return {
+        "round_id": rid,
+        "source_file": "CzechCorrector (auto)",
+        "entries": [asdict(e) for e in deduped],
+        "stats": {
+            "total": len(deduped),
+            "typography": sum(1 for e in deduped if e.confidence == 1.0),
+            "suggestions": sum(1 for e in deduped if e.confidence < 1.0),
+        }
+    }

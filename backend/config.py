@@ -1,5 +1,6 @@
 """Konfigurace aplikace NGM Localizer."""
 
+import os
 from pathlib import Path
 
 # Zakladni cesty
@@ -12,7 +13,14 @@ TRANSLATION_MEMORY_PATH = DATA_DIR / "translation_memory.json"
 
 # Terminologická databáze (ngm-terminology v2.0)
 # Multi-doménová referenční DB — 244K+ termínů (geografie, geologie, medicína, ...)
-MULTI_DOMAIN_DB_PATH = r"C:\Users\stock\Documents\000_NGM\BIOLIB\termdb.db"
+# Override přes env var TERMDB_PATH pro jiný stroj
+MULTI_DOMAIN_DB_PATH = os.environ.get(
+    "TERMDB_PATH", r"C:\Users\stock\Documents\000_NGM\BIOLIB\termdb.db"
+)
+
+# Claude API — model a token limity pro překlad
+TRANSLATION_MODEL = os.environ.get("TRANSLATION_MODEL", "claude-sonnet-4-6")
+TRANSLATION_MAX_TOKENS = int(os.environ.get("TRANSLATION_MAX_TOKENS", "8192"))
 
 # Illustrator proxy
 PROXY_URL = "http://localhost:3001"

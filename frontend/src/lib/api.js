@@ -126,6 +126,8 @@ export const api = {
   correctionsApply: (id, roundId) => request('POST', `/projects/${id}/corrections/${roundId}/apply`),
   correctionsList: (id) => request('GET', `/projects/${id}/corrections`),
   correctionsGet: (id, roundId) => request('GET', `/projects/${id}/corrections/${roundId}`),
+  correctionsAi: (id, instruction) => request('POST', `/projects/${id}/corrections/ai`, { instruction }),
+  correctionsAutoSuggestions: (id) => request('POST', `/projects/${id}/corrections/auto-suggestions`),
 
   // === Layout Generator ===
   layoutTemplates: () => request('GET', '/layout/templates'),

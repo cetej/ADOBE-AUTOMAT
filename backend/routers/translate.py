@@ -88,6 +88,10 @@ async def api_translate(project_id: str, req: TranslateRequest = TranslateReques
     if not project:
         raise HTTPException(404, "Project not found")
 
+    # Guard: zabraň paralelnímu překladu stejného projektu
+    if _translate_progress.get(project_id, {}).get("status") == "running":
+        raise HTTPException(409, "Překlad již probíhá.")
+
     # Vybrat elementy k prekladu
     if req.ids:
         elements = [e for e in project.elements if e.id in set(req.ids)]
@@ -159,23 +163,29 @@ def _run_translation(project_id, elements, project_type, model, backgrounder, ov
                     elem.status = TextStatus.OVERIT
                 applied += 1
 
-        # CzechCorrector
+        # CzechCorrector — typografie + detekce anglicismů (s ochranou odborných termínů)
         corrected_count = 0
+        suggestions_total = 0
         if _CORRECTOR_AVAILABLE and applied > 0:
+            from services.translation_service import get_protected_terms_cached
+            protected = get_protected_terms_cached()
             try:
-                corrector = CzechCorrector()
-                for elem in project.elements:
-                    if elem.czech and elem.id in result_map:
-                        result_c = corrector.correct(
-                            elem.czech,
-                            fix_typography=True,
-                            check_spelling=False,
-                            check_rules=False,
-                        )
-                        if result_c.auto_count > 0:
-                            elem.czech = result_c.text
-                            corrected_count += 1
-                corrector.close()
+                with CzechCorrector(protected_terms=protected) as corrector:
+                    for elem in project.elements:
+                        if elem.czech and elem.id in result_map:
+                            result_c = corrector.correct(
+                                elem.czech,
+                                fix_typography=True,
+                                check_spelling=False,
+                                check_rules=True,
+                            )
+                            if result_c.auto_count > 0:
+                                elem.czech = result_c.text
+                                corrected_count += 1
+                            if hasattr(result_c, 'suggestion_count') and result_c.suggestion_count > 0:
+                                suggestions_total += result_c.suggestion_count
+                                logger.debug("Korektor návrhy [%s]: %s",
+                                             elem.id, result_c.summary())
             except Exception as e:
                 logger.warning("CzechCorrector: %s", e)
 
@@ -187,6 +197,7 @@ def _run_translation(project_id, elements, project_type, model, backgrounder, ov
             "translated": applied,
             "from_memory": from_memory,
             "typo_corrected": corrected_count,
+            "corrector_suggestions": suggestions_total,
         })
         logger.info("Preklad dokoncen: %d prelozeno, %d z TM, %d typografie",
                     applied, from_memory, corrected_count)

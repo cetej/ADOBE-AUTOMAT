@@ -15,7 +15,10 @@ import os
 import re
 from pathlib import Path
 
-from config import TRANSLATION_MEMORY_PATH, MULTI_DOMAIN_DB_PATH
+from config import (
+    TRANSLATION_MEMORY_PATH, MULTI_DOMAIN_DB_PATH,
+    TRANSLATION_MODEL, TRANSLATION_MAX_TOKENS,
+)
 from models import TextElement
 
 logger = logging.getLogger(__name__)
@@ -29,6 +32,33 @@ try:
 except (ImportError, Exception) as e:
     _main_db = None
     logger.info("TermDB: nedostupná (%s)", e)
+
+# === Protected terms cache (TermDB → CzechCorrector) ===
+
+_protected_terms: set[str] | None = None
+
+
+def get_protected_terms_cached() -> set[str]:
+    """Vrátí chráněné termíny z TermDB (lazy load, cached).
+
+    Používá se v CzechCorrector pro ochranu odborných termínů před
+    falešnými korekcemi. Cache pro celý lifetime procesu.
+    """
+    global _protected_terms
+    if _protected_terms is not None:
+        return _protected_terms
+    if not _main_db:
+        _protected_terms = set()
+        return _protected_terms
+    try:
+        from ngm_terminology.corrector import get_protected_terms
+        _protected_terms = get_protected_terms(_main_db, max_per_domain=200)
+        logger.info("Protected terms: %d termínů načteno z TermDB", len(_protected_terms))
+    except Exception as e:
+        logger.warning("Protected terms: chyba načítání (%s) — pokračuji bez ochrany", e)
+        _protected_terms = set()
+    return _protected_terms
+
 
 # === Translation Memory ===
 
@@ -91,8 +121,8 @@ def write_back_to_termdb(elements: list[TextElement]) -> int:
                     )
                     if is_new:
                         added += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("TermDB write-back chyba: %s — %s", en, e)
 
     if added:
         logger.info("TermDB write-back: +%d novych terminu z ADOBE-AUTOMAT", added)
@@ -115,32 +145,47 @@ def _category_to_domain(category: str) -> str:
 
 # === Claude API preklad ===
 
-SYSTEM_PROMPT = """Jsi profesionální překladatel pro National Geographic Česko. Překládáš anglické texty do češtiny.
+SYSTEM_PROMPT = """Jsi profesionální překladatel pro National Geographic Česko.
+Překládáš krátké anglické texty z tiskových podkladů (IDML soubory časopisu, mapové popisky).
+Elementy jsou KRÁTKÉ — typicky 1–15 slov: popisky map, nadpisy, legendy, datace, zkratky.
 
-## Pravidla překladu
+## ZEMĚPISNÉ NÁZVY
+- Zavedené české exonymy: Germany→Německo, Vienna→Vídeň, Mediterranean Sea→Středozemní moře
+- Města: London→Londýn, Paris→Paříž, Rome→Řím, Moscow→Moskva, Prague→Praha
+- Bez českého ekvivalentu ponech beze změny: Reykjavík, Nuuk, Brattahlíð
 
-### Zeměpisné názvy
-- Používej zavedené české exonymy: Germany→Německo, Vienna→Vídeň, Mediterranean Sea→Středozemní moře
-- Ponech názvy bez českého ekvivalentu beze změny: Reykjavík, Nuuk, Brattahlíð
-- České varianty měst: London→Londýn, Paris→Paříž, Rome→Řím, Moscow→Moskva
+## ZKRATKY STÁTŮ
+- U.K.→VB, GER.→NĚM., SPA.→ŠPA., GRE.→ŘEC., SWI.→ŠVÝ., AUT.→RAK.
 
-### Formáty datací
-- A.D. 700 → 700 n. l.
-- 700 BC → 700 př. n. l.
-- ca./c. → cca
-- 1st century → 1. století
+## DATACE A ČÍSLA
+- A.D. 700 → 700 n. l. | 700 BC → 700 př. n. l. | ca./c. → cca
+- 1st century → 1. století | 10th–15th centuries → 10.–15. století
+- Tisíce s mezerou: 1 000 000 (ne 1,000,000)
+- Desetinná čárka: 3,14 (ne 3.14)
 
-### Zkratky států
-- U.K. → VB, GER. → NĚM., SPA. → ŠPA., GRE. → ŘEC., SWI. → ŠVÝ., AUT. → RAK.
+## TYPOGRAFIE
+- České uvozovky: „text" (ne "text")
+- Pomlčka v rozsazích: 1990–2000 (ne 1990-2000)
+- Procenta: 50 % (mezera před %)
+- Jednotky: 5 km, 3 °C (mezera před jednotkou)
+- Nedělitelná mezera za jednopísmennými předložkami: k, s, v, z, o, u
 
-### Styl
-- Přirozená, plynulá čeština bez doslovného překladu
-- Zachovej odbornou terminologii (geologie, historie, biologie)
-- Zachovej formátování (velká písmena, interpunkce)
-- Krátké popisky překládej stručně, delší texty přirozeně
+## FALSE FRIENDS
+| EN | Špatně | Správně |
+|---|---|---|
+| billion | bilion | miliarda |
+| evidence | evidence | důkazy, doklady |
+| actual/actually | aktuální/aktuálně | skutečný/ve skutečnosti |
+| eventually | eventuálně | nakonec |
+| dramatic (change) | dramatický | výrazný, zásadní |
+
+## STYL
+- Přirozená čeština — ne doslovný překlad
+- Zachovej velká písmena (ALL CAPS) pokud jsou v originále — jde o layout
+- Zachovej zkratky a odbornou terminologii (geologie, biologie, geografie)
 - Diakritika vždy správně
 
-## Výstup
+## VÝSTUP
 Vrať JSON pole objektů: [{"id": "...", "czech": "..."}]
 DŮLEŽITÉ: V hodnotách "czech" NIKDY nepoužívej rovné uvozovky ("). Místo nich použij české typografické „ " nebo je vynech.
 Pouze JSON, žádný další text."""
@@ -165,7 +210,7 @@ def get_api_key() -> str | None:
 def translate_batch(
     elements: list[TextElement],
     project_type: str = "idml",
-    model: str = "claude-sonnet-4-6",
+    model: str = TRANSLATION_MODEL,
     max_batch: int = 25,
     backgrounder: str | None = None,
     progress_callback=None,
@@ -346,7 +391,7 @@ def _translate_api_call(
         messages=[{"role": "user", "content": user_msg}],
         model=resolve_model(model) if len(model) < 20 else model,
         system=system,
-        max_tokens=8192,
+        max_tokens=TRANSLATION_MAX_TOKENS,
     )
 
     logger.info("Překlad: %.1fs, $%.4f, %d+%d tokenů",

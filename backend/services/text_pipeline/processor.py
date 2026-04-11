@@ -258,7 +258,7 @@ class ClaudeProcessor:
                 result_content = result_content.strip()
 
             # Zaznamenat trace
-            _elapsed = _time.perf_counter() - _t_start
+            _elapsed = time.perf_counter() - _t_start
             self._record_trace(
                 input_tokens, output_tokens,
                 cache_read or 0, cache_write or 0,
