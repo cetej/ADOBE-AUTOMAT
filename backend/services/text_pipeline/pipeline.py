@@ -11,7 +11,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .element_merger import ElementMerger
+from .element_merger import ElementMerger, strip_pipeline_markers
 from .phases import (
     CompletenessChecker,
     TermVerifier,
@@ -243,11 +243,11 @@ class TextPipeline:
         # Rozdělit zpět na elementy
         updated_texts = ElementMerger.split_back(current_text, project.elements)
 
-        # Aplikovat na projekt
+        # Aplikovat na projekt — strip pipeline markers jako safety net
         updated_count = 0
         for elem in project.elements:
             if elem.id in updated_texts:
-                new_text = updated_texts[elem.id]
+                new_text = strip_pipeline_markers(updated_texts[elem.id])
                 if new_text != elem.czech:
                     elem.czech = new_text
                     updated_count += 1

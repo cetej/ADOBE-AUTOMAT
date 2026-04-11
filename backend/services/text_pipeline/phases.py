@@ -18,6 +18,7 @@ from .processor import (
     ClaudeProcessor, ProcessingResult,
     MODEL_OPUS, MODEL_SONNET, MODEL_HAIKU,
 )
+from .element_merger import strip_pipeline_markers
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,16 @@ def sanitize_article_text(text: str) -> str:
     text = re.sub(r'\n{4,}', '\n\n\n', text)
 
     return text.strip()
+
+
+def sanitize_output_text(text: str) -> str:
+    """Finální sanitizace VÝSTUPU pipeline — odstraní VŠECHNY pipeline markery.
+
+    Volá se na každém výstupním bodě (writeback, export).
+    Defence-in-depth: i když split_back funguje správně, toto chytí cokoliv co proklouzlo.
+    """
+    text = sanitize_article_text(text)
+    return strip_pipeline_markers(text)
 
 # --- Terminologické utility ---
 

@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 
 from services.illustrator_bridge import execute_script
+from services.text_pipeline.element_merger import strip_pipeline_markers
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +96,9 @@ def writeback_map(elements: list, save_document: bool = True) -> dict:
                 layer_id = int(id_part)
             except ValueError:
                 pass
-        # \n -> \r pro Illustrator
-        text = elem.czech.replace("\n", "\r")
+        # Strip pipeline markers + \n -> \r pro Illustrator
+        text = strip_pipeline_markers(elem.czech)
+        text = text.replace("\n", "\r")
         writable.append((elem.layer_name, layer_id, index, text))
 
     if not writable:

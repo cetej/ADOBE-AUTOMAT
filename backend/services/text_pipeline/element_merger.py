@@ -22,6 +22,22 @@ _CAPTION_CATEGORIES = {"caption", "annotations", "labels", "info_boxes"}
 # Vše ostatní (geografie, legendy, credits...) — řadí se za body
 
 
+    # Regex pro jakýkoliv pipeline marker (otevírací i uzavírací, včetně orig-)
+MARKER_PATTERN = re.compile(r'<!--\[/?(?:elem|orig)-[^\]]*\]-->')
+
+
+def strip_pipeline_markers(text: str) -> str:
+    """Odstraní všechny pipeline processing markery z textu.
+
+    Centrální funkce — volat na KAŽDÉM výstupním bodě pipeline
+    (writeback, split_back fallback, sanitize).
+    Odstraňuje: <!--[elem-ID]-->, <!--[/elem-ID]-->, <!--[orig-ID]-->, <!--[/orig-ID]-->
+    """
+    if not text or '<!--[' not in text:
+        return text
+    return MARKER_PATTERN.sub('', text).strip()
+
+
 class ElementMerger:
     """Spojuje a rozděluje TextElements pro pipeline zpracování."""
 
@@ -122,6 +138,8 @@ class ElementMerger:
         """Parsuje zpracovaný text zpět na elementy.
 
         Hledá ID značky <!--[elem-ID]--> v textu a extrahuje obsah.
+        Sanity check: odmítne text který je mnohonásobně delší než originál
+        (indikátor LLM reasoning garbage místo přeloženého textu).
 
         Args:
             processed_text: Text zpracovaný pipeline (se značkami)
@@ -132,10 +150,31 @@ class ElementMerger:
         """
         result = {}
 
+        # Index originálních délek pro sanity check
+        orig_lengths = {}
+        for e in elements:
+            if e.czech:
+                orig_lengths[e.id] = len(e.czech)
+
         # Najdi všechny ID značky
         for match in cls.TAG_PATTERN.finditer(processed_text):
             elem_id = match.group(1)
             text = match.group(2).strip()
+            if not text:
+                continue
+
+            # Sanity check: odmítni text > 5x delší než originál
+            # (LLM reasoning, tabulky oprav, merged výstup jiných elementů)
+            orig_len = orig_lengths.get(elem_id, 0)
+            if orig_len > 0 and len(text) > max(orig_len * 5, 200):
+                logger.warning(
+                    f"split_back: {elem_id} text {len(text)} chars vs "
+                    f"original {orig_len} chars — rejected (likely LLM garbage)"
+                )
+                continue
+
+            # Strip any remaining pipeline markers from extracted text
+            text = strip_pipeline_markers(text)
             if text:
                 result[elem_id] = text
 

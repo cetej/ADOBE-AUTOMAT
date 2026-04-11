@@ -18,6 +18,7 @@ from config import EXPORTS_DIR
 from services.idml_processor import unpack_idml, pack_idml, cleanup_temp, list_stories
 from services.idml_writer import safe_batch_replace
 from services.idml_validator import validate_packed_idml
+from services.text_pipeline.element_merger import strip_pipeline_markers
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def writeback_idml(
         if not el.story_id:
             skipped += 1
             continue
-        stories_map[el.story_id].append((el.contents, el.czech))
+        stories_map[el.story_id].append((el.contents, strip_pipeline_markers(el.czech)))
 
     if not stories_map:
         return {"output_path": None, "replaced": 0, "skipped": skipped, "errors": ["Zadne preklady k zapisu"]}

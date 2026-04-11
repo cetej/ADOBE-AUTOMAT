@@ -10,6 +10,7 @@ from pathlib import Path
 
 from config import PROJECTS_DIR
 from models import Project, ProjectCreate, ProjectPhase, ProjectType
+from services.text_pipeline.element_merger import strip_pipeline_markers
 
 
 def _slugify(text: str) -> str:
@@ -78,8 +79,12 @@ def create_project(req: ProjectCreate) -> Project:
 
 
 def save_project(project: Project) -> None:
-    """Ulozi projekt na disk."""
+    """Ulozi projekt na disk. Stripne pipeline markery z elem.czech."""
     project.updated_at = datetime.now().isoformat()
+    # Defence-in-depth: nikdy neuložit pipeline markery na disk
+    for elem in project.elements:
+        if elem.czech and '<!--[' in elem.czech:
+            elem.czech = strip_pipeline_markers(elem.czech)
     path = _project_path(project.id)
     path.write_text(
         project.model_dump_json(indent=2),
