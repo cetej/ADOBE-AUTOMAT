@@ -160,39 +160,52 @@ def _clean_paragraphs(project) -> list[dict]:
     if not elements:
         return []
 
-    # Seskup podle story/layer — spoj VŠECHNY fragmenty jednoho story
-    from collections import OrderedDict
-    groups = OrderedDict()
-    for elem in elements:
-        group = elem.story_id or elem.layer_name or "other"
-        if group not in groups:
-            groups[group] = {"texts": [], "categories": []}
-        groups[group]["texts"].append(elem.czech.strip())
-        cat = (elem.category.value if elem.category else "") or ""
-        if cat:
-            groups[group]["categories"].append(cat)
+    # Seskup fragmenty do odstavců — mezera v indexu = nový odstavec
+    # InDesign dělí text na Content elementy (inline formátování),
+    # ale <Br/> mezi nimi se projeví jako přeskočený index.
+    import re
 
     paragraphs = []
-    for group, data in groups.items():
-        # Spojit fragmenty — mezera mezi nimi, ale ne dvojitá
-        joined = " ".join(t for t in data["texts"] if t)
-        # Vyčistit: dvojité mezery, mezera před interpunkcí
-        import re
+    current_story = None
+    current_texts = []
+    current_cats = []
+    last_index = -1
+
+    def _flush():
+        if not current_texts:
+            return
+        joined = " ".join(t for t in current_texts if t)
         joined = re.sub(r'\s+', ' ', joined)
-        joined = re.sub(r'\s+([.,;:!?)])', r'\1', joined)
-
-        # Kategorie = nejčastější neprázdná
+        joined = re.sub(r'\s+([.,;:!?)\u201c\u201d])', r'\1', joined)
         cat = ""
-        if data["categories"]:
+        if current_cats:
             from collections import Counter
-            cat = Counter(data["categories"]).most_common(1)[0][0]
-
+            cat = Counter(current_cats).most_common(1)[0][0]
         if joined.strip():
-            paragraphs.append({
-                "text": joined.strip(),
-                "category": cat,
-                "group": group,
-            })
+            paragraphs.append({"text": joined.strip(), "category": cat, "group": current_story})
+
+    for elem in elements:
+        story = elem.story_id or elem.layer_name or "other"
+        # Parsuj index z ID (format: "Story_u123/5")
+        try:
+            idx = int(elem.id.rsplit("/", 1)[1])
+        except (ValueError, IndexError):
+            idx = -1
+
+        # Nový odstavec pokud: jiný story NEBO mezera v indexu (přeskočený Br)
+        if story != current_story or (idx > last_index + 1 and last_index >= 0):
+            _flush()
+            current_texts = []
+            current_cats = []
+            current_story = story
+
+        current_texts.append(elem.czech.strip())
+        cat = (elem.category.value if elem.category else "") or ""
+        if cat:
+            current_cats.append(cat)
+        last_index = idx
+
+    _flush()
 
     # Seřadit podle typu sekce
     section_order = ["title", "heading", "subtitle", "lead", "body", "main_text",
