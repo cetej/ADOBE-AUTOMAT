@@ -142,25 +142,69 @@ _CLEAN_CATEGORIES = {
 }
 
 
-def _clean_elements(project) -> list:
-    """Vrátí elementy s překladem, seřazené pro čistý redakční výstup."""
-    # Pořadí sekcí
+def _clean_paragraphs(project) -> list[dict]:
+    """Vrátí spojené odstavce pro čistý export.
+
+    Elementy ze stejného story/layer spojí do jednoho odstavce —
+    InDesign dělí text na fragmenty po <Br/> a <Content>,
+    ale pro export chceme plynulý text.
+
+    Returns:
+        list[dict]: [{"text": "...", "category": "body", "group": "Story_u36e1"}]
+    """
+    # Filtruj elementy s překladem
+    elements = [e for e in project.elements
+                if e.czech and e.czech.strip()
+                and (not e.category or e.category.value in _CLEAN_CATEGORIES or e.category is None)]
+
+    if not elements:
+        return []
+
+    # Seskup podle story/layer — spoj VŠECHNY fragmenty jednoho story
+    from collections import OrderedDict
+    groups = OrderedDict()
+    for elem in elements:
+        group = elem.story_id or elem.layer_name or "other"
+        if group not in groups:
+            groups[group] = {"texts": [], "categories": []}
+        groups[group]["texts"].append(elem.czech.strip())
+        cat = (elem.category.value if elem.category else "") or ""
+        if cat:
+            groups[group]["categories"].append(cat)
+
+    paragraphs = []
+    for group, data in groups.items():
+        # Spojit fragmenty — mezera mezi nimi, ale ne dvojitá
+        joined = " ".join(t for t in data["texts"] if t)
+        # Vyčistit: dvojité mezery, mezera před interpunkcí
+        import re
+        joined = re.sub(r'\s+', ' ', joined)
+        joined = re.sub(r'\s+([.,;:!?)])', r'\1', joined)
+
+        # Kategorie = nejčastější neprázdná
+        cat = ""
+        if data["categories"]:
+            from collections import Counter
+            cat = Counter(data["categories"]).most_common(1)[0][0]
+
+        if joined.strip():
+            paragraphs.append({
+                "text": joined.strip(),
+                "category": cat,
+                "group": group,
+            })
+
+    # Seřadit podle typu sekce
     section_order = ["title", "heading", "subtitle", "lead", "body", "main_text",
                      "bullet", "caption", "info_boxes", "annotations", "labels"]
 
-    def sort_key(elem):
-        cat = (elem.category.value if elem.category else "") or ""
+    def sort_key(p):
         try:
-            return section_order.index(cat)
+            return section_order.index(p["category"])
         except ValueError:
             return len(section_order)
 
-    return sorted(
-        [e for e in project.elements
-         if e.czech and e.czech.strip()
-         and (not e.category or e.category.value in _CLEAN_CATEGORIES or e.category is None)],
-        key=sort_key,
-    )
+    return sorted(paragraphs, key=sort_key)
 
 
 def _section_label(category: str) -> str:
@@ -185,24 +229,23 @@ async def api_export_docx(project_id: str):
     if not project:
         raise HTTPException(404, "Project not found")
 
-    elements = _clean_elements(project)
-    if not elements:
+    paragraphs = _clean_paragraphs(project)
+    if not paragraphs:
         raise HTTPException(400, "Žádné přeložené elementy k exportu")
 
     doc = Document()
     doc.add_heading(project.name, level=1)
 
     current_section = None
-    for elem in elements:
-        cat = (elem.category.value if elem.category else "") or ""
+    for para in paragraphs:
+        cat = para["category"]
         section = _section_label(cat)
         if section != current_section:
             current_section = section
             doc.add_heading(section, level=2)
 
         p = doc.add_paragraph()
-        run = p.add_run(elem.czech)
-        # Titulky a nadpisy větším písmem
+        run = p.add_run(para["text"])
         if cat in ("title", "heading"):
             run.font.size = Pt(14)
             run.bold = True
@@ -233,15 +276,15 @@ async def api_export_md(project_id: str):
     if not project:
         raise HTTPException(404, "Project not found")
 
-    elements = _clean_elements(project)
-    if not elements:
+    paragraphs = _clean_paragraphs(project)
+    if not paragraphs:
         raise HTTPException(400, "Žádné přeložené elementy k exportu")
 
     lines = [f"# {project.name}", ""]
 
     current_section = None
-    for elem in elements:
-        cat = (elem.category.value if elem.category else "") or ""
+    for para in paragraphs:
+        cat = para["category"]
         section = _section_label(cat)
         if section != current_section:
             current_section = section
@@ -249,11 +292,11 @@ async def api_export_md(project_id: str):
             lines.append("")
 
         if cat in ("title", "heading"):
-            lines.append(f"### {elem.czech}")
+            lines.append(f"### {para['text']}")
         elif cat in ("caption", "labels", "annotations"):
-            lines.append(f"*{elem.czech}*")
+            lines.append(f"*{para['text']}*")
         else:
-            lines.append(elem.czech)
+            lines.append(para["text"])
         lines.append("")
 
     md_content = "\n".join(lines)
