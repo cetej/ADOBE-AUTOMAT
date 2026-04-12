@@ -136,6 +136,9 @@ def get_master_story_ids(unpacked_dir: str | Path) -> set[str]:
 def list_stories(unpacked_dir: str | Path, skip_master: bool = True) -> list[Path]:
     """Vrati seznam Story XML souboru v rozbalenem IDML.
 
+    Stories jsou serazene podle vizualniho poradi na spreadu (Y pozice
+    textoveho ramce). Stories bez ramce na spreadu jsou na konci.
+
     Args:
         skip_master: Pokud True, preskoci stories patrici pouze master pages
                      (template/placeholder texty).
@@ -148,18 +151,56 @@ def list_stories(unpacked_dir: str | Path, skip_master: bool = True) -> list[Pat
     all_stories = sorted(stories_dir.glob("Story_*.xml"))
 
     if not skip_master:
-        return all_stories
+        master_ids = set()
+    else:
+        master_ids = get_master_story_ids(unpacked_dir)
 
-    master_ids = get_master_story_ids(unpacked_dir)
-    if not master_ids:
-        return all_stories
+    if master_ids:
+        filtered = [
+            s for s in all_stories
+            if s.stem.replace("Story_", "") not in master_ids
+        ]
+        logger.info(
+            "Stories: %d total, %d after master page filtering",
+            len(all_stories), len(filtered),
+        )
+    else:
+        filtered = all_stories
 
-    filtered = [
-        s for s in all_stories
-        if s.stem.replace("Story_", "") not in master_ids
-    ]
-    logger.info(
-        "Stories: %d total, %d after master page filtering",
-        len(all_stories), len(filtered),
-    )
+    # Seřadí stories podle Y pozice textových rámců na spreadu
+    story_order = _get_story_visual_order(unpacked_dir)
+    filtered.sort(key=lambda s: story_order.get(s.stem.replace("Story_", ""), 9999))
+
     return filtered
+
+
+def _get_story_visual_order(unpacked_dir: Path) -> dict[str, float]:
+    """Vrátí mapování story_id → Y pozice z TextFrame na spreadech.
+
+    Umožňuje řadit stories podle vizuálního pořadí na stránce (shora dolů).
+    """
+    spread_dir = unpacked_dir / "Spreads"
+    if not spread_dir.exists():
+        return {}
+
+    order = {}
+    for xml_file in spread_dir.glob("*.xml"):
+        try:
+            tree = ET.parse(xml_file)
+            for elem in tree.getroot().iter():
+                tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+                if tag != "TextFrame":
+                    continue
+                story_id = elem.get("ParentStory", "")
+                transform = elem.get("ItemTransform", "")
+                if story_id and transform:
+                    parts = transform.split()
+                    if len(parts) >= 6:
+                        y = float(parts[-1])
+                        # Pokud story už má pozici, vezmi nižší Y (vyšší na stránce)
+                        if story_id not in order or y < order[story_id]:
+                            order[story_id] = y
+        except (ET.ParseError, ValueError) as e:
+            logger.warning("Failed to parse spread %s: %s", xml_file, e)
+
+    return order
