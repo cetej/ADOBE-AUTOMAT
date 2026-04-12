@@ -84,6 +84,9 @@ def extract_stories(unpacked_dir: str | Path) -> list[TextElement]:
 
         content_idx = 0
         for raw in raw_elements:
+            if raw["type"] == "Br":
+                content_idx += 1  # Br vytváří mezeru v indexech → signál pro odstavcový break v exportu
+                continue
             if raw["type"] != "Content":
                 continue
 
