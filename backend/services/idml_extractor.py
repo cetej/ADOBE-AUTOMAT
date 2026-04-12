@@ -35,34 +35,64 @@ def parse_story(story_path: str | Path) -> list[dict]:
 
         ps = _style_name(psr.get("AppliedParagraphStyle", ""))
 
+        # Sbírá CharacterStyleRange přímo i uvnitř <Change> (Track Changes)
+        # Change může být: (A) potomek PSR, (B) potomek CSR uvnitř PSR
+        csr_sources = []
         for child in psr:
             ctag = _local_tag(child.tag)
             if ctag == "CharacterStyleRange":
-                cap = child.get("Capitalization", "")
-                pt = child.get("PointSize", "")
-                bl = child.get("BaselineShift", "")
-                fc = child.get("FillColor", "")
-                cs = _style_name(child.get("AppliedCharacterStyle", ""))
-                trk = child.get("Tracking", "")
+                csr_sources.append(child)
+            elif ctag == "Change":
+                if child.get("ChangeType", "") == "DeletedText":
+                    continue
+                for grandchild in child:
+                    if _local_tag(grandchild.tag) == "CharacterStyleRange":
+                        csr_sources.append(grandchild)
 
-                for e in child:
-                    etag = _local_tag(e.tag)
-                    if etag == "Content":
-                        text = e.text or ""
-                        elements.append({
-                            "type": "Content",
-                            "text": text,
-                            "len": len(text),
-                            "ps": ps,
-                            "cap": cap,
-                            "pt": pt,
-                            "bl": bl,
-                            "fc": fc,
-                            "cs": cs,
-                            "trk": trk,
-                        })
-                    elif etag == "Br":
-                        elements.append({"type": "Br", "ps": ps})
+        for csr in csr_sources:
+            cap = csr.get("Capitalization", "")
+            pt = csr.get("PointSize", "")
+            bl = csr.get("BaselineShift", "")
+            fc = csr.get("FillColor", "")
+            cs = _style_name(csr.get("AppliedCharacterStyle", ""))
+            trk = csr.get("Tracking", "")
+
+            # Sbírá Content/Br — pokud CSR nemá přímý Content,
+            # hledá i v <Change> (Track Changes varianta B, např. u6085)
+            direct_nodes = []
+            change_nodes = []
+            for e in csr:
+                etag = _local_tag(e.tag)
+                if etag in ("Content", "Br"):
+                    direct_nodes.append(e)
+                elif etag == "Change":
+                    if e.get("ChangeType", "") == "DeletedText":
+                        continue
+                    for ce in e:
+                        if _local_tag(ce.tag) in ("Content", "Br"):
+                            change_nodes.append(ce)
+
+            # Preferuj přímý Content; Change content jen když CSR je prázdný
+            content_nodes = direct_nodes if direct_nodes else change_nodes
+
+            for e in content_nodes:
+                etag = _local_tag(e.tag)
+                if etag == "Content":
+                    text = e.text or ""
+                    elements.append({
+                        "type": "Content",
+                        "text": text,
+                        "len": len(text),
+                        "ps": ps,
+                        "cap": cap,
+                        "pt": pt,
+                        "bl": bl,
+                        "fc": fc,
+                        "cs": cs,
+                        "trk": trk,
+                    })
+                elif etag == "Br":
+                    elements.append({"type": "Br", "ps": ps})
 
     return elements
 
