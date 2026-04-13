@@ -154,6 +154,23 @@ class AnthropicEngine(InferenceEngine):
         self.default_model = default_model
         self._client = None
 
+    def _reload_key_and_client(self) -> bool:
+        """Znovu načte API klíč z .env a vytvoří nového klienta.
+
+        Volá se automaticky při 401 (invalid x-api-key) — typicky
+        když se klíč změnil za běhu serveru.
+        """
+        new_key = _get_api_key()
+        if not new_key:
+            return False
+        if new_key == self.api_key:
+            logger.warning("API klíč se nezměnil, reload nepomůže")
+            return False
+        logger.info("API klíč se změnil, vytvářím nového klienta")
+        self.api_key = new_key
+        self._client = None  # force re-create
+        return True
+
     @property
     def client(self):
         """Lazy init klienta."""
@@ -227,8 +244,14 @@ class AnthropicEngine(InferenceEngine):
         try:
             response = self.client.messages.create(**call_kwargs)
         except Exception as e:
-            logger.error("Engine '%s' selhalo: %s", self.engine_id, e)
-            raise
+            # Auto-retry při 401: reload klíče z .env a zkusit znovu
+            import anthropic
+            if isinstance(e, anthropic.AuthenticationError) and self._reload_key_and_client():
+                logger.info("Retry po reload API klíče")
+                response = self.client.messages.create(**call_kwargs)
+            else:
+                logger.error("Engine '%s' selhalo: %s", self.engine_id, e)
+                raise
 
         elapsed = time.perf_counter() - start
 

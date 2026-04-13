@@ -212,7 +212,18 @@ class ClaudeProcessor:
             if tools:
                 stream_kwargs["tools"] = tools
 
-            with self.client.messages.stream(**stream_kwargs) as stream:
+            try:
+                _stream_ctx = self.client.messages.stream(**stream_kwargs)
+            except Exception as _auth_err:
+                import anthropic as _anth
+                if isinstance(_auth_err, _anth.AuthenticationError) and self._engine._reload_key_and_client():
+                    logger.info("Retry po reload API klíče")
+                    self.client = self._engine.client
+                    _stream_ctx = self.client.messages.stream(**stream_kwargs)
+                else:
+                    raise
+
+            with _stream_ctx as stream:
                 for text in stream.text_stream:
                     result_content += text
 
