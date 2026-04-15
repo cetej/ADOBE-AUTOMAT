@@ -45,5 +45,12 @@ grouped_test.xlsx
 # Dist-info (accidentally unpacked packages)
 *.dist-info/
 
+# Vendor packages installed into backend/ (pip install --target)
+backend/pydantic/
+backend/pydantic_core/
+backend/annotated_types/
+backend/typing_extensions.py
+backend/typing_inspection/
+
 # Playwright MCP (forbidden)
 .playwright-mcp/
