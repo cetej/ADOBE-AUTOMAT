@@ -149,6 +149,7 @@ def _run_translation(project_id, elements, project_type, model, backgrounder, ov
             model=model,
             backgrounder=backgrounder,
             progress_callback=on_progress,
+            project_id=project_id,
         )
 
         # Aplikovat preklady

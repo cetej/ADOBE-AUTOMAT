@@ -107,11 +107,26 @@ def write_back_to_termdb(elements: list[TextElement]) -> int:
         return 0
 
     added = 0
+    skipped_conflict = 0
     for el in elements:
         if el.czech and el.status == "OK" and el.contents:
             en = el.contents.strip()
             cz = el.czech.strip()
             if en and cz and len(en) >= 2 and en.lower() != cz.lower():
+                # Write-protection: pokud DB už kanonický CZ má a liší se,
+                # nezapisuj — chráníme sdílenou DB před kontaminací halucinacemi
+                try:
+                    existing = _main_db.batch_translate([en], from_lang="en", to_lang="cs")
+                    if existing and en in existing:
+                        canon = existing[en]
+                        if canon.lower().strip() != cz.lower().strip():
+                            logger.info("TermDB write-back SKIP (konflikt): %r → db=%r, ours=%r",
+                                        en, canon, cz)
+                            skipped_conflict += 1
+                            continue
+                except Exception:
+                    pass  # pokud lookup selže, pokračuj do add_term (zachovej původní chování)
+
                 domain = _category_to_domain(el.category)
                 try:
                     is_new = _main_db.add_term(
@@ -123,6 +138,10 @@ def write_back_to_termdb(elements: list[TextElement]) -> int:
                         added += 1
                 except Exception as e:
                     logger.warning("TermDB write-back chyba: %s — %s", en, e)
+
+    if skipped_conflict:
+        logger.info("TermDB write-back: %d termínů přeskočeno (konflikt s kanonem)",
+                    skipped_conflict)
 
     if added:
         logger.info("TermDB write-back: +%d novych terminu z ADOBE-AUTOMAT", added)
@@ -148,6 +167,12 @@ def _category_to_domain(category: str) -> str:
 SYSTEM_PROMPT = """Jsi profesionální překladatel pro National Geographic Česko.
 Překládáš krátké anglické texty z tiskových podkladů (IDML soubory časopisu, mapové popisky).
 Elementy jsou KRÁTKÉ — typicky 1–15 slov: popisky map, nadpisy, legendy, datace, zkratky.
+
+## TERMINOLOGICKÝ GLOSÁŘ (pokud je přiložen níže)
+- Termíny v tabulce glosáře jsou OVĚŘENÉ z referenční databáze (246K+ termínů, BIOLIB, geografická data).
+- Pokud EN text odpovídá některému řádku glosáře: POUŽIJ POUZE uvedený český ekvivalent.
+- ZAKÁZÁNO překládat tyto termíny vlastními slovy, synonymem nebo parafrází.
+- Pokud glosář uvádí jiný překlad než se zdá logický: NÁSLEDUJ glosář, ne svůj odhad.
 
 ## ZEMĚPISNÉ NÁZVY
 - Zavedené české exonymy: Germany→Německo, Vienna→Vídeň, Mediterranean Sea→Středozemní moře
@@ -215,6 +240,7 @@ def translate_batch(
     max_batch: int = 25,
     backgrounder: str | None = None,
     progress_callback=None,
+    project_id: str | None = None,
 ) -> list[dict]:
     """Prelozi batch elementu pomoci Claude API.
 
@@ -272,7 +298,48 @@ def translate_batch(
         results = _translate_api_call(collector, batch, project_type, model, backgrounder)
         all_results.extend(results)
 
+    # Glossary enforcer — post-LLM DB substituce (kanonické názvy z termdb.db)
+    try:
+        from services.glossary_enforcer import enforce_glossary_on_results
+        all_results, fixes = enforce_glossary_on_results(elements, all_results)
+        if fixes:
+            logger.info("Glossary enforcer: %d překladů vynuceno z termdb.db", len(fixes))
+            for fx in fixes[:10]:
+                logger.debug("  %s: %r → %r", fx["en"], fx["was"], fx["now"])
+            # Ulož fixes do reportu projektu (append-only pro historii)
+            if project_id:
+                _append_glossary_fixes_report(project_id, fixes)
+    except Exception as e:
+        logger.warning("Glossary enforcer: chyba (%s) — překlady zůstaly beze změny", e)
+
     return all_results
+
+
+def _append_glossary_fixes_report(project_id: str, fixes: list[dict]) -> None:
+    """Zapíše glossary enforcer fixes do JSON logu projektu (append)."""
+    from datetime import datetime
+    from config import PROJECTS_DIR
+    try:
+        project_dir = PROJECTS_DIR / project_id
+        project_dir.mkdir(parents=True, exist_ok=True)
+        log_path = project_dir / "glossary_fixes.json"
+        existing = []
+        if log_path.exists():
+            try:
+                existing = json.loads(log_path.read_text(encoding="utf-8"))
+                if not isinstance(existing, list):
+                    existing = []
+            except (json.JSONDecodeError, OSError):
+                existing = []
+        ts = datetime.now().isoformat(timespec="seconds")
+        entry = {"timestamp": ts, "fixes": fixes}
+        existing.append(entry)
+        log_path.write_text(
+            json.dumps(existing, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+    except Exception as e:
+        logger.warning("Nelze uložit glossary_fixes.json: %s", e)
 
 
 def _fix_unescaped_quotes(text: str) -> str:
@@ -322,8 +389,12 @@ def _build_term_hints(elements: list[TextElement]) -> str:
             return ""
 
         lines = [
-            "\n## Terminologický glosář (ověřené překlady z referenční databáze)",
-            "Použij tyto překlady — jsou ověřené a správné:",
+            "\n## TERMINOLOGICKÝ GLOSÁŘ — OVĚŘENÉ PŘEKLADY (termdb.db, 246K+ termínů)",
+            "",
+            "⚠️ POVINNÉ: Pro termíny z tabulky níže POUŽIJ POUZE tento český ekvivalent.",
+            "ZAKÁZÁNO překládat vlastními slovy, hledat synonyma nebo parafrázovat.",
+            "Tyto překlady jsou ověřené z BIOLIB, geografických databází a odborných zdrojů.",
+            "Pokud glosář uvádí překlad — je to ta správná volba, nediskutuj.",
             "",
             "| EN | CZ |",
             "|---|---|",

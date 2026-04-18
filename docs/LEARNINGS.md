@@ -4,6 +4,37 @@ Poučení z vývoje. Nejnovější záznamy nahoře.
 
 ---
 
+## 2026-04-18 — Glossary Enforcer: post-LLM DB substituce (P0 z audit TASK)
+
+**Kontext:** Audit `docs/TASK_term_verification_audit.md` odhalil, že `termdb.db` (246K+) byla v překladu jen **soft hint** v systém promptu. LLM mohl přepsat kanonické názvy vlastními (pattern co selhal v NG-ROBOT: "lesňáček cerulea" místo "lesňáček modropláštíkový").
+
+**Implementace:**
+- Nový modul `backend/services/glossary_enforcer.py` — post-LLM deterministický override
+- Napojeno do `translation_service.translate_batch()` za `_translate_api_call()`
+- Zpřísnění direktivy v `SYSTEM_PROMPT` a `_build_term_hints()`: "ZAKÁZÁNO překládat tyto termíny vlastními slovy"
+- Write-protection v `write_back_to_termdb()`: pokud DB už kanonický překlad má a liší se, nezapisovat (ochrana proti kontaminaci 246K DB)
+
+**Kritický nález: `NormalizedTermDB.batch_translate()` a `.lookup()` dělají LIKE '%x%' fuzzy search**
+- `'London'` → vrátí `'pamlok omejský'` (salamandr *Batrachuperus londongensis* obsahuje substring "London")
+- Pro enforcer **NEPOUŽITELNÉ** — enforcer musí dělat exact SQL match na `canonical_name` + fallback přes EN alias kde `canonical_name == EN translation`
+- Lekce: fuzzy search API je OK pro hints/suggestions, ale pro deterministický override je potřeba EXACT match
+
+**Ochrana proti false positives (zjištěné při testu na 7 reálných projektech):**
+1. **Krátké tokeny (len<4)**: `'of'→'OF'`, `'by'→'By'`, `'is'→'IS'` — DB obsahuje zrcadlové (identita) záznamy pro stopwords
+2. **Zrcadlové záznamy obecně**: pokud `cs == en` case-insensitive, ignorovat
+3. **Meta-anotované varianty**: `'Brattahlíð (ponechat, historický název)'`, `'Středověké klimatické optimum / středověká teplá perioda'` — DB obsahuje editorské poznámky v závorkách a lomítkové alternativy, enforcer je nesmí přebírat jako kanonikum
+4. **Synonymy ochrana**: pokud LLM výstup je v množině CS variant pro daný canonical, neměnit (např. "London"→"Londýn" i "London" jsou DB variants)
+
+**Výsledky na 7 reálných projektech (819 přeložených elementů):**
+- 15 fixes (1.8%) — geografická transliterace (Amu Darya→Amudarja, Syr Darya→Syrdarja), oprava kanonického názvu (Aral Sea→Aralské jezero), biologické druhy
+- Známý limit: enforcer přepíše skloněný tvar na nominativ (`'mědi' → 'měď'`, `'pracovní paměti' → 'pracovní paměť'`). V krátkých IDML popiscích typicky správné, v delším textu může narušit gramatiku. Editor umožňuje manual revert.
+
+**Klíčové reference:**
+- NG-ROBOT Phase 1.5: `C:\Users\stock\Documents\000_NGM\NG-ROBOT\claude_processor\glossary_enforcer.py` (biology-specific, italic Latin pattern matching)
+- ADOBE-AUTOMAT varianta: per-element exact match (elementy jsou KRÁTKÉ 1-15 slov, ne dlouhé články)
+
+---
+
 ## 2026-03-23 — Kritický bugfix: Layout Generator text mapping
 
 **Problém:** Text se do generovaného IDML nedostával. Headline a deck fungovaly, ale body text, captions, pull quotes, bio, credits — vše bylo prázdné.
