@@ -7,6 +7,7 @@ Usage:
 
 import time
 import logging
+from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
@@ -61,6 +62,78 @@ class PhaseResult:
     web_searches: int = 0
     elements_updated: int = 0
     error: Optional[str] = None
+    corrections_summary: str = ""  # markdown s tabulkou/seznamem oprav z fáze
+
+
+# Markdown hlavičky summary sekcí per phase — pro extrakci z LLM výstupu
+_PHASE_SUMMARY_HEADERS = {
+    2: ["PROVEDENÉ DOPLNĚNÍ", "SHRNUTÍ"],
+    3: ["TERMINOLOGICKÉ OPRAVY"],
+    4: ["PROVEDENÉ OPRAVY (jednotky a měny)", "POCHYBNÁ FAKTA K OVĚŘENÍ", "PROVEDENÉ OPRAVY"],
+    5: ["JAZYKOVÉ A KONTEXTOVÉ OPRAVY"],
+    6: ["STYLISTICKÉ ÚPRAVY"],
+}
+
+
+def _extract_section(content: str, header: str) -> str:
+    """Vytáhne z markdownu sekci začínající '## {header}' do další '##' nebo konce."""
+    if not content:
+        return ""
+    import re as _re
+    pattern = _re.compile(
+        r'^##\s+' + _re.escape(header) + r'\s*\n(.*?)(?=\n##\s|\Z)',
+        _re.MULTILINE | _re.DOTALL
+    )
+    m = pattern.search(content)
+    return m.group(0).strip() if m else ""
+
+
+def _extract_phase_summary(phase: int, processing_result) -> str:
+    """Vrátí markdown summary oprav pro danou fázi.
+
+    Preferuje artifacts['corrections_table'] (Phase 3), jinak extrahuje sekce
+    z processing_result.content podle _PHASE_SUMMARY_HEADERS.
+    """
+    artifacts = getattr(processing_result, "artifacts", None) or {}
+
+    # Phase 3 — corrections_table je plná tabulka z Research callu
+    if phase == 3 and artifacts.get("corrections_table"):
+        return str(artifacts["corrections_table"]).strip()
+
+    content = getattr(processing_result, "content", "") or ""
+    headers = _PHASE_SUMMARY_HEADERS.get(phase, [])
+    parts = []
+    for h in headers:
+        sec = _extract_section(content, h)
+        if sec:
+            parts.append(sec)
+    return "\n\n".join(parts)
+
+
+def _format_corrector_summary(auto_count: int, suggestions: list) -> str:
+    """Vygeneruje markdown summary pro Phase 4.5 CzechCorrector."""
+    lines = [
+        "## KOREKTOR — automatické opravy",
+        f"- Celkem auto-oprav: **{auto_count}**",
+        f"- Návrhy ke schválení: **{len(suggestions) if suggestions else 0}**",
+    ]
+    if suggestions:
+        lines += [
+            "",
+            "### Návrhy ke schválení",
+            "",
+            "| # | Typ | Původní | Opravené | Pravidlo |",
+            "|---|---|---|---|---|",
+        ]
+        for i, s in enumerate(suggestions[:200], 1):
+            orig = (getattr(s, "original", "") or "").replace("|", "\\|")
+            corr = (getattr(s, "corrected", "") or "").replace("|", "\\|")
+            rule = (getattr(s, "rule", "") or "").replace("|", "\\|")
+            typ = getattr(s, "type", "") or ""
+            lines.append(f"| {i} | {typ} | {orig} | {corr} | {rule} |")
+        if len(suggestions) > 200:
+            lines.append(f"\n_... +{len(suggestions) - 200} dalších návrhů zkráceno_")
+    return "\n".join(lines)
 
 
 @dataclass
@@ -87,6 +160,57 @@ PHASE_NAMES = {
     5: "Jazyk a kontext",
     6: "Stylistika",
 }
+
+
+def _save_pipeline_report(project_dir: Path, project, result) -> None:
+    """Uloží kompletní markdown report pipeline běhu do pipeline_report.md.
+
+    Struktura:
+    - Hlavička (projekt, čas, souhrnné statistiky)
+    - Sekce per fáze (success/failed), tokeny, duration, corrections_summary
+    """
+    phases = result.phases_completed + result.phases_failed
+    # Řadíme fáze číselně, aby 4.5 bylo mezi 4 a 5
+    phases_sorted = sorted(phases, key=lambda p: (p.phase if p.phase != 45 else 4.5))
+
+    lines = [
+        f"# Pipeline report — {project.name}",
+        "",
+        f"- **Projekt ID**: `{project.id}`",
+        f"- **Vygenerováno**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"- **Celkem fází**: {len(phases_sorted)} ({len(result.phases_completed)} OK, {len(result.phases_failed)} failed)",
+        f"- **Aktualizováno elementů**: {result.elements_updated}",
+        f"- **Celkem tokenů**: {result.total_tokens:,}",
+        f"- **Celková doba**: {result.total_duration_s} s",
+        "",
+        "---",
+        "",
+    ]
+
+    for pr in phases_sorted:
+        phase_label = f"Phase {pr.phase}" if pr.phase != 45 else "Phase 4.5"
+        status_emoji = "OK" if pr.success else "FAILED"
+        lines += [
+            f"# {phase_label}: {pr.phase_name} — {status_emoji}",
+            "",
+            f"- Doba: {pr.duration_s} s",
+            f"- Tokeny: {pr.tokens_used:,} (in={pr.input_tokens:,}, out={pr.output_tokens:,})",
+        ]
+        if pr.web_searches:
+            lines.append(f"- Web searches: {pr.web_searches}")
+        if pr.error:
+            lines += ["", f"**Chyba:** {pr.error}"]
+
+        if pr.corrections_summary:
+            lines += ["", pr.corrections_summary]
+        else:
+            lines += ["", "_Žádné opravy nenalezeny / prázdný výstup fáze._"]
+
+        lines += ["", "---", ""]
+
+    report_path = project_dir / "pipeline_report.md"
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+    logger.info("Pipeline report uložen: %s (%d fází)", report_path, len(phases_sorted))
 
 
 def _store_corrector_suggestions(project_dir: Path, suggestions: list) -> None:
@@ -182,6 +306,9 @@ class TextPipeline:
                     # Aktualizuj findings ledger
                     update_findings_ledger(project_dir, phase, phase_result.content)
 
+                    # Extrahuj markdown summary oprav z LLM výstupu
+                    pr.corrections_summary = _extract_phase_summary(phase, phase_result)
+
                     result.phases_completed.append(pr)
                     result.total_tokens += phase_result.tokens_used
                     logger.info(
@@ -230,13 +357,26 @@ class TextPipeline:
                         check_spelling=False,
                         check_rules=True,
                     )
-                if corrector_result.auto_count > 0:
+                auto_count = getattr(corrector_result, "auto_count", 0) or 0
+                suggestions = getattr(corrector_result, "suggestions", []) or []
+                if auto_count > 0:
                     current_text = corrector_result.text
-                    logger.info("Phase 4.5 CzechCorrector: %d oprav", corrector_result.auto_count)
+                    logger.info("Phase 4.5 CzechCorrector: %d oprav", auto_count)
                 if hasattr(corrector_result, 'suggestion_count') and corrector_result.suggestion_count > 0:
                     logger.info("Phase 4.5 CzechCorrector návrhy: %d — %s",
                                 corrector_result.suggestion_count, corrector_result.summary())
-                    _store_corrector_suggestions(project_dir, corrector_result.suggestions)
+                    _store_corrector_suggestions(project_dir, suggestions)
+
+                # Přidej PhaseResult pro 4.5, aby se report zobrazil v UI
+                if auto_count > 0 or suggestions:
+                    corr_pr = PhaseResult(
+                        phase=45,
+                        phase_name=PHASE_NAMES[45],
+                        success=True,
+                        duration_s=0,
+                        corrections_summary=_format_corrector_summary(auto_count, suggestions),
+                    )
+                    result.phases_completed.append(corr_pr)
             except Exception as e:
                 logger.warning("CzechCorrector: %s", e)
 
@@ -265,6 +405,12 @@ class TextPipeline:
             f"{updated_count} elementů aktualizováno, "
             f"{result.total_tokens} tokenů, {result.total_duration_s}s"
         )
+
+        # Uložit markdown report s tabulkami oprav per fáze
+        try:
+            _save_pipeline_report(project_dir, project, result)
+        except Exception as e:
+            logger.warning("Nelze uložit pipeline_report.md: %s", e)
 
         return result
 

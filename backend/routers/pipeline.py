@@ -144,6 +144,7 @@ def api_process_text(project_id: str, req: PipelineRequest = PipelineRequest()):
                     "tokens": pr.tokens_used,
                     "web_searches": pr.web_searches,
                     "error": pr.error,
+                    "corrections_summary": pr.corrections_summary or "",
                 })
 
             progress["status"] = "done"

@@ -7,6 +7,7 @@
   import Outputs from './pages/Outputs.svelte';
   import WriteBack from './pages/WriteBack.svelte';
   import Korektury from './pages/Korektury.svelte';
+  import Reports from './pages/Reports.svelte';
   import LayoutWizard from './pages/LayoutWizard.svelte';
   import PatternEditor from './pages/PatternEditor.svelte';
   import Traces from './pages/Traces.svelte';
@@ -80,6 +81,7 @@
           { id: 'outputs', label: 'V\u00fdstupy' },
           { id: 'writeback', label: 'Z\u00e1pis' },
           { id: 'korektury', label: 'Korektury' },
+          { id: 'reports', label: 'Reporty' },
         ] as tab}
           <button
             class="px-4 py-2.5 text-sm font-medium border-b-2 transition-colors
@@ -124,6 +126,8 @@
       <WriteBack />
     {:else if currentPage === 'korektury'}
       <Korektury />
+    {:else if currentPage === 'reports'}
+      <Reports />
     {:else}
       <Dashboard />
     {/if}

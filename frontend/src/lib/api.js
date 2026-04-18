@@ -288,4 +288,13 @@ export const api = {
     return request('GET', `/traces/summary${qs ? '?' + qs : ''}`);
   },
   tracesRecent: (limit = 50) => request('GET', `/traces/recent?limit=${limit}`),
+
+  // Reports (tabulky oprav z pipeline fází + glossary enforcer)
+  listReports: (projectId) => request('GET', `/projects/${projectId}/reports`),
+  getPipelineReport: (projectId) => request('GET', `/projects/${projectId}/reports/pipeline`),
+  getGlossaryFixes: (projectId) => request('GET', `/projects/${projectId}/reports/glossary-fixes`),
+  pipelineReportDownloadUrl: (projectId) => `${BASE}/projects/${projectId}/reports/pipeline/download`,
+  glossaryFixesDownloadUrl: (projectId) => `${BASE}/projects/${projectId}/reports/glossary-fixes/download`,
+  correctorSuggestionsDownloadUrl: (projectId) => `${BASE}/projects/${projectId}/reports/corrector-suggestions/download`,
+  pipelineChangesDownloadUrl: (projectId) => `${BASE}/projects/${projectId}/reports/pipeline-changes/download`,
 };
