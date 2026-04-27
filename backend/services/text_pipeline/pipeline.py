@@ -456,7 +456,8 @@ class TextPipeline:
             verifier = TermVerifier(api_key=api_key)
             domains = detect_domains_from_text(current_text)
             termdb_ctx = format_termdb_for_prompt(
-                max_terms=100, article_domains=domains
+                max_terms=100, article_domains=domains,
+                article_text=current_text,
             )
             return verifier.verify_terms(current_text, termdb_ctx,
                                           system_context=system_context)

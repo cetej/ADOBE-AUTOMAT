@@ -133,12 +133,168 @@ except ImportError:
     CORRECTOR_RULES_AVAILABLE = False
 
 
+
+# Latin binomial: Capitalized genus + lowercase species epithet (2+ chars each),
+# optionally followed by lowercase subspecies epithet.
+# Shared with article-relevance extraction below.
+_LATIN_BINOMIAL_RE = re.compile(
+    r"\b([A-Z][a-z]{1,})\s+([a-z]{2,})(?:\s+([a-z]{2,}))?\b"
+)
+
+# Generic words that look like genus names but are not Latin binomials.
+_LATIN_STOPWORDS = frozenset({
+    "National", "Geographic", "Natural", "History", "Museum", "University",
+    "Institute", "Society", "Center", "Centre", "Journal", "Studies",
+    "New", "North", "South", "East", "West", "Upper", "Lower",
+    "World", "Global", "International", "American", "European", "African",
+    "Asian", "Pacific", "Atlantic", "Indian", "Arctic", "Antarctic",
+})
+
+
+def _extract_article_terms_from_db(
+    db_path: str,
+    article_text: str,
+    extra_domains: Optional[List[str]] = None,
+) -> dict:
+    """Extract article-relevant EN→CZ term pairs from termdb.
+
+    Strategy:
+    1. Scan article_text for Latin binomial / trinomial candidates via regex.
+    2. For each candidate: lookup canonical_name (exact, case-insensitive),
+       then fallback to aliases table.
+    3. ORDER BY tr.is_primary DESC — primary translation preferred but no hard
+       is_primary=1 filter (preserves ~150K iNaturalist records).
+    4. Returns {surface_form: cz_translation} — small dict (5-50 terms typically).
+    """
+    import sqlite3
+
+    candidates: list = []
+    for m in _LATIN_BINOMIAL_RE.finditer(article_text):
+        genus = m.group(1)
+        if genus in _LATIN_STOPWORDS:
+            continue
+        species = m.group(2)
+        subspecies = m.group(3)
+        binomial = f"{genus} {species}"
+        if binomial not in candidates:
+            candidates.append(binomial)
+        if subspecies:
+            trinomial = f"{genus} {species} {subspecies}"
+            if trinomial not in candidates:
+                candidates.append(trinomial)
+
+    if not candidates:
+        return {}
+
+    result: dict = {}
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        try:
+            lower_candidates = [c.lower() for c in candidates]
+            placeholders = ",".join("?" * len(lower_candidates))
+
+            # Pass 1: canonical_name lookup
+            cursor.execute(
+                f"""
+                SELECT t.canonical_name, tr.name
+                FROM terms t
+                JOIN translations tr ON tr.term_id = t.id AND tr.language = 'cs'
+                WHERE LOWER(t.canonical_name) IN ({placeholders})
+                ORDER BY tr.is_primary DESC, tr.id ASC
+                """,
+                lower_candidates,
+            )
+            seen: set = set()
+            for row in cursor.fetchall():
+                canon_lower = (row[0] or "").lower()
+                if canon_lower and canon_lower not in seen:
+                    seen.add(canon_lower)
+                    # Map surface form back (preserve original case)
+                    for surface in candidates:
+                        if surface.lower() == canon_lower:
+                            result[surface] = row[1]
+                            break
+
+            # Pass 2: aliases fallback for unmatched candidates
+            unmatched = [c for c in candidates if c not in result]
+            if unmatched:
+                alias_placeholders = ",".join("?" * len(unmatched))
+                alias_lower = [c.lower() for c in unmatched]
+                cursor.execute(
+                    f"""
+                    SELECT a.alias, tr.name
+                    FROM aliases a
+                    JOIN terms t ON t.id = a.term_id
+                    JOIN translations tr ON tr.term_id = t.id AND tr.language = 'cs'
+                    WHERE LOWER(a.alias) IN ({alias_placeholders})
+                    ORDER BY tr.is_primary DESC, tr.id ASC
+                    """,
+                    alias_lower,
+                )
+                alias_seen: set = set()
+                for row in cursor.fetchall():
+                    alias_val_lower = (row[0] or "").lower()
+                    if alias_val_lower and alias_val_lower not in alias_seen:
+                        alias_seen.add(alias_val_lower)
+                        for surface in unmatched:
+                            if surface.lower() == alias_val_lower:
+                                result[surface] = row[1]
+                                break
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning("format_termdb_for_prompt: DB lookup error (%s)", e)
+
+    logger.debug(
+        "format_termdb_for_prompt: %d candidates, %d termdb hits",
+        len(candidates), len(result),
+    )
+    return result
+
+
 def format_termdb_for_prompt(max_terms: int = 100,
-                              article_domains: Optional[List[str]] = None) -> str:
-    """Formátuje termdb.db (246K+ termínů) jako markdown kontext."""
+                              article_domains: Optional[List[str]] = None,
+                              article_text: Optional[str] = None) -> str:
+    """Formátuje termdb.db (246K+ termínů) jako markdown kontext.
+
+    Když je article_text zadán (doporučeno), používá article-relevance extrakci:
+    - Skenuje text pro latinské binominály (regex)
+    - Vyhledá každý kandidát v termdb (exact match, ORDER BY is_primary DESC)
+    - Výsledek: 5-50 termínů typicky (relevantní pro článek, ne arbitrárních 100)
+    - is_primary=1 hard filter ODSTRANĚN — zahrnuje iNaturalist záznamy (~150K)
+
+    Bez article_text: fallback na doménový výběr s max_terms limitem (legacy).
+    """
     if not _main_db:
         return ""
 
+    # --- Cesta 1: article-relevance extraction (preferovaná) ---
+    if article_text:
+        try:
+            from config import MULTI_DOMAIN_DB_PATH
+            db_path = str(MULTI_DOMAIN_DB_PATH)
+        except Exception:
+            db_path = None
+
+        if db_path:
+            terms = _extract_article_terms_from_db(db_path, article_text, article_domains)
+            if terms:
+                lines = ["| EN | CZ |", "|---|---|"]
+                for en, cz in terms.items():
+                    lines.append(f"| {en} | {cz} |")
+                table = "\n".join(lines)
+                result = (
+                    "## OVĚŘENÉ TERMÍNY — RELEVANTNÍ PRO ČLÁNEK (termdb.db, 246K+)\n"
+                    "Tyto termíny jsou ověřené — NEMUSÍŠ je ověřovat web searchem:\n\n"
+                    f"{table}\n"
+                    "\nUšetřené web searches věnuj NOVÝM termínům.\n\n---\n"
+                )
+                return result
+            # No binomials found in article — fall through to domain fallback
+
+    # --- Cesta 2: domain fallback (legacy, bez article_text nebo prázdný výsledek) ---
     parts = []
     _domain_categories = {
         'geography': ['country', 'sea', 'river', 'mountain_range', 'lake', 'island'],
