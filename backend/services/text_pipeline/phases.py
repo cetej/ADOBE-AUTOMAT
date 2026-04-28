@@ -155,6 +155,7 @@ def _extract_article_terms_from_db(
     db_path: str,
     article_text: str,
     extra_domains: Optional[List[str]] = None,
+    with_genus_fallback: bool = True,
 ) -> dict:
     """Extract article-relevant EN→CZ term pairs from termdb.
 
@@ -164,7 +165,14 @@ def _extract_article_terms_from_db(
        then fallback to aliases table.
     3. ORDER BY tr.is_primary DESC — primary translation preferred but no hard
        is_primary=1 filter (preserves ~150K iNaturalist records).
-    4. Returns {surface_form: cz_translation} — small dict (5-50 terms typically).
+    4. **Genus consensus fallback** (if with_genus_fallback=True):
+       For binomials still unmatched, look up genus-level consensus from
+       sibling species in DB. Result format: "nový druh <genus> (*Latin*)".
+       Prevents Phase 1 from hallucinating CZ name for new species.
+       Ref: PREKLAD species genus_consensus 2026-04-28 — Ceratogyrus attonitifer
+       case where 8 sibling sklípkan species exist but the new species itself
+       is not in DB; without this fallback Claude generated "tarantule" (kalk).
+    5. Returns {surface_form: cz_translation} — small dict (5-50 terms typically).
     """
     import sqlite3
 
@@ -246,6 +254,28 @@ def _extract_article_terms_from_db(
             conn.close()
     except Exception as e:
         logger.warning("format_termdb_for_prompt: DB lookup error (%s)", e)
+
+    # Pass 3: Genus consensus fallback for unmatched binomials.
+    # If a binomial isn't in DB but ≥3 siblings share a CZ genus name,
+    # synthesize "nový druh <genus> (*Latin*)" so Phase 1 doesn't hallucinate.
+    # Uses NormalizedTermDB.lookup_genus_consensus — shared with NG-ROBOT and PREKLAD
+    # via ngm_terminology package. Ref: PREKLAD genus consensus 2026-04-28.
+    if with_genus_fallback and TERMDB_AVAILABLE and _main_db is not None:
+        if hasattr(_main_db, "lookup_genus_consensus"):
+            still_unmatched = [c for c in candidates if c not in result]
+            for binomial in still_unmatched:
+                parts = binomial.split()
+                if not parts or not parts[0][0].isupper():
+                    continue
+                genus = parts[0]
+                try:
+                    consensus, _ = _main_db.lookup_genus_consensus(genus)
+                except Exception:
+                    consensus = None
+                if consensus:
+                    # Conservative formulation — signals "new species" without
+                    # halucinating Czech name. Phase 5/web-search may upgrade later.
+                    result[binomial] = f"nový druh {consensus} (*{binomial}*)"
 
     logger.debug(
         "format_termdb_for_prompt: %d candidates, %d termdb hits",

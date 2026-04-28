@@ -159,6 +159,41 @@ Slova, která vypadají jako přímé ekvivalenty, ale mají jiný významový r
 - Kontrolovat neobvyklá spojení (podstatné jméno + přídavné jméno, sloveso + předložka)
 - Ověřit, že frazémy dávají smysl v kontextu
 
+#### 5a. POHLAVNÍ A VĚKOVÉ DIMORFISMY ZVÍŘAT — KRITICKÝ KALK PATTERN
+
+Anglické fráze "bull/cow/calf + zvíře" nebo "male/female + zvíře" vytváří v doslovném
+českém překladu nepřirozené přídavné jméno z podstatného:
+
+| EN | Doslovný překlad (KALK ❌) | Standardní česká forma ✅ |
+|----|----------------------------|---------------------------|
+| bull elephant | býčí slon | **samec slona** / starý samec / sloní býk |
+| cow elephant | kraví slon / krávový slon | samice slona / slonice |
+| calf elephant | telecí slon | mládě slona / slůně |
+| male spider | samčí pavouk | samec pavouka |
+| female spider | samiččí pavouk | samice pavouka |
+| young X | mladý X | mládě X |
+
+**Detekční pravidlo:** Pokud najdeš v textu spojení `<přídavné_jméno_od_zvířete> + <jiné_zvíře>`
+("býčí slon", "samčí pavouk"), označ jako `kalk` a navrhni opravu na "samec X" / "samice X" /
+"mládě X" podle kontextu.
+
+#### 5b. ZOOLOGICKÁ TERMINOLOGIE — KOREKTNÍ ČESKÝ ROD A ČELEĎ
+
+Pokud text obsahuje obecné jméno čeledi či rodu, ověř:
+
+- **Anglický termín a česká čeleď se shodují**:
+  | EN | Česká čeleď/rod | Pozor |
+  |----|------------------|--------|
+  | tarantula (Theraphosidae) | **sklípkan** (mužský) | NE "tarantule" v ČJ — to je Lycosa (slíďáci) |
+  | baboon spider (Theraphosidae, Afrika) | **sklípkan** (paviání) | "pavián pavouk" je kalk |
+  | wolf spider (Lycosidae) | **slíďák** | "vlkopavouk" je kalk |
+  | jumping spider (Salticidae) | **skákavka** | |
+  | rain frog (Breviceps spp.) | **otylka** | "dešťová žába" je kalk |
+
+- **Druhy mimo termdb** — pokud termdb_extract dodává tvar "nový druh <CZ_genus>",
+  POVINNĚ použij přesně tento tvar. NEVYMÝŠLEJ vlastní český druhový název.
+  Příklad: `Ceratogyrus attonitifer` → "nový druh sklípkana (*Ceratogyrus attonitifer*)".
+
 ### 6. OPAKOVÁNÍ SLOV (PRIORITA)
 
 **Cíl:** Nahradit min. 70% výskytů "říká" a variant
