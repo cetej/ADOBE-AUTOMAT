@@ -4,6 +4,124 @@ Poučení z vývoje. Nejnovější záznamy nahoře.
 
 ---
 
+## 2026-04-29 — Geografické názvy: prompt-level pravidla pro konzistenci
+
+**Kontext:** Po fix cyrilice se v Alaska mapě objevila další třída chyb — nekonzistentní překlad geografických názvů. Stejný term `Barry Arm` byl ve dvou vrstvách jednou `záliv Barry`, podruhé `Barry Arm`. `Glenn Highway`, `Seward Highway` zůstávaly v angličtině. „To Prince William Sound" → „Ke Prince William Sound" (předložka „ke" + 1. pád = nesmysl).
+
+**Příčina:** Původní `SYSTEM_PROMPT` měl jen vágní `## ZEMĚPISNÉ NÁZVY` s 3 příklady (Vienna→Vídeň, Reykjavík). Claude se rozhodoval **statisticky** — kde viděl v tréninku víc překlady, tam přeložil; kde viděl víc originál, ponechal. Bez tvrdých pravidel = inkonzistence.
+
+**Řešení — 6 explicitních pravidel** v sekci „ZEMĚPISNÉ NÁZVY — TVRDÁ PRAVIDLA":
+1. Generikum se VŽDY překládá (tabulka 25+ generik: Lake→jezero, Arm/Sound/Bay→záliv, Highway→dálnice, Mountains→pohoří, Passage→průliv, Canal→průplav, atd.)
+2. Vlastní jméno se NEPŘEKLÁDÁ
+3. Pořadí: česky `[generikum] [Vlastní]` — opačně než EN
+4. Skloňování: skloňuje se POUZE generikum (nejvyšší impact: „k zálivu Prince William", ne „Ke Prince William Sound")
+5. Sídla — výjimka, NEPŘEKLÁDAJÍ se (Glacier View, Victory Bible Camp)
+6. Konzistence napříč dokumentem — stejný term vždy stejný překlad
+
+**Empirický výsledek (retranslate Alaska, overwrite=True):**
+
+| | Před | Po |
+|---|---|---|
+| `Barry Arm` (Landslides) | `Barry Arm` ❌ | `záliv Barry` ✅ |
+| `Barry Arm` (Hydro) | `záliv Barry` ✅ | `záliv Barry` ✅ |
+| `Glenn Highway` | `Glenn Highway` ❌ | `dálnice Glenn` ✅ |
+| `Seward Highway` | `Seward Highway` ❌ | `dálnice Seward` ✅ |
+| `To Prince William Sound` | `Ke Prince William Sound` ❌ | `K zálivu Prince William` ✅ |
+| `Barry Arm tsunami arrival time` | `Čas příchodu tsunami z Barry Arm` ⚠️ | `Čas příchodu tsunami ze zálivu Barry` ✅ |
+| `Glacier View` (sídlo) | `Glacier View` ✅ | `Glacier View` ✅ |
+| `Alaska Marine Highway` | `Alaska Marine Highway` ⚠️ | `Alaska Marine Highway` ⚠️ (sporné — proper název ferry systému) |
+
+**10 z 23 klíčových termínů** opraveno, **konzistence napříč vrstvami** (rule 6) drží. Cena ~$0.085 za retranslate, ~50 sekund.
+
+**Lekce:** vágní prompt = statistický výstup. Pro doménu, kde existuje **deterministická editorská konvence** (NG kartografie), prompt MUSÍ obsahovat tvrdá pravidla a vyčerpávající tabulku známých případů. „Příklady" v promptu nestačí — model je interpretuje jako sugesci, ne pravidlo.
+
+**Princip:** invariant je tvrdé tehdy, když ho lze unit-testnout. „Lake → jezero" je tvrdé. „Zachovej diakritiku" je měkké.
+
+**Soubory:**
+- `backend/services/translation_service.py:170-220` — sekce „ZEMĚPISNÉ NÁZVY — TVRDÁ PRAVIDLA"
+- `backend/services/translation_service.py:_CYRILLIC_TO_LATIN` — rozšířen o н/т/к/м (Claude haluje) a ь/ъ (vyhodit)
+
+---
+
+## 2026-04-29 — Cyrilice v českém překladu (halucinace homoglyphů)
+
+**Kontext:** V mapě Alaska_v16 se ve 2 elementech ze 120 objevil text `'Aktivní\nsesuvы'` — poslední znak je cyrilské `ы` (U+044B), ne latinské `y`. Vizuálně k nerozeznání, ale funkčně chyba (search/grep/export to nepozná, write-back zpátky do AI by to mohl pokazit).
+
+**Příčina:** Halucinace Claude. U slov s blízkou ruskou variantou model tu a tam zaplete cyrilský homoglyph. System prompt to předtím nezakazoval (prompt obsahoval „diakritika vždy správně" — ale to o cyrilici nic neříká).
+
+**Architektonický princip — defense in depth pro LLM výstup:**
+
+LLM nikdy nemá deterministickou záruku na žádný invariant. Ke každému invariantu, který je pro doménu kritický, je potřeba:
+1. **Prompt-level** — explicit zákaz/požadavek (snižuje frekvenci, ne k 0)
+2. **Post-processing detektor** — deterministické pravidlo, které invariant zkontroluje
+3. **Auto-fix nebo eskalace** — pokud se dá deterministicky opravit (homoglyph mapping), opravit; jinak označit a hodit na uživatele
+
+V překladu už máme tuhle vrstvu pro:
+- Em-dash → en-dash (`routers/translate.py:162`)
+- Kanonická terminologie (Glossary Enforcer)
+- Typografie + anglicismy (CzechCorrector)
+
+Cyrilice byla blind spot. Přidán `_strip_cyrillic_homoglyphs` v `translation_service.py` se stejnou strukturou jako ostatní (mapping + log + apply).
+
+**Mapping je konzervativní:** jen vizuálně identické nebo skoro identické (`а→a`, `е→e`, `о→o`, `р→p`, `с→c`, `у→y`, `х→x`, `і→i`, `ј→j`, `ы→y`, `и→i`, `й→j` + uppercase). Cyrilice mimo mapping (např. `б`, `ж`, `ш`) se nemění a logujeme warning — uživatel uvidí v editoru a rozhodne.
+
+**Lekce:** vždycky se zeptej _„který invariant z této domény LLM porušuje statisticky? a mám pro něj deterministický check?"_. Pokud check chybí, blind spot. Sebenáročnější prompt to nezachrání.
+
+**Soubory:**
+- `backend/services/translation_service.py:345-400` — `_CYRILLIC_TO_LATIN` mapping + `_strip_cyrillic_homoglyphs` helper
+- `backend/services/translation_service.py:300-318` — volání v `translate_batch` před glossary enforcerem
+- `backend/services/translation_service.py:213-216` — prompt sekce „ABECEDA — KRITICKÉ"
+- `backend/tests/test_translation_parsing.py` — 6 regression testů
+
+---
+
+## 2026-04-29 — LLM JSON odpovědi: dva nezávislé failure modes při překladu mapy
+
+**Kontext:** AI překlad u mapy `NGM_2605_Alaska_v16_FINAL2_FP_METRIC` (120 elementů, 27 % s `\n` v contents typu „Direction\nof View") tiše kolaboval. Symptom: `ValueError: Claude API vratil neplatny JSON`. Předchozí mapy fungovaly — nepoznaný regression.
+
+**Dva nezávislé bugy se aktivovaly současně:**
+
+### Bug 1 — raw control chars uvnitř JSON stringu
+
+Claude při překladu víceřádkového vstupu (`"Direction" + LF + "of View"`) vrací překlad **se stejným raw LF uvnitř JSON stringu**:
+```
+[{"id": "x", "czech": "Smer
+pohledu"}]
+```
+RFC 8259 to zakazuje (control chars uvnitř stringu MUSÍ být escapované jako `\n` nebo `
+`). `json.loads()` padne s `Invalid control character at: line N column M`.
+
+Sourozenecký modul `text_extractor.py` to už řeší ve směru Illustrator→backend (Illustrator používá `\r`), ale ve směru Claude→backend chyběla symetrická obrana.
+
+### Bug 2 — můj první fix byl tupý
+
+První pokus: `re.sub(r'[\x00-\x1f]', escape, text)` na celém JSON. **To rozbije strukturu** — JSON spec povoluje `LF`, `CR`, `TAB` jako legitimní whitespace **mezi tokens**. Můj cleanup je escapnul taky → `[
+ {
+ "id"...` — `\u` mimo string není JSON, parser padá s `Expecting value: line 1 column 2`.
+
+**Lekce:** sanitize JSON musí být **parser-aware** — odlišit „uvnitř stringu" vs „mezi tokens". Helper `_escape_control_chars_in_strings()` v `translation_service.py` drží jednoduchý state (in_string, escape_next).
+
+### Bug 3 — Claude halucinuje vstupní klíč ve výstupu
+
+Po fix 1+2 přijela další chyba: `KeyError: 'czech'`. Claude vracel `[{"id": "...", "text": "<překlad>"}]` místo `"czech"`. Když má vstup i výstup stejné schéma s klíčem `text`, model **kopíruje klíč ze vstupu** — což zní jako pravděpodobné chování i při velmi explicitním promptu.
+
+**Řešení (víc vrstev defense-in-depth):**
+1. **Vstupní klíč jiný než výstupní** — vstup `"en"`, výstup `"czech"`. Claude pak nemá důvod kopírovat.
+2. **Explicitní instrukce v user promptu** (ne jen system): „VSTUP klíč `en`, VÝSTUP klíč `czech`, nikdy `text`/`en`/`translation`". User prompt má v praxi vyšší adherenci než system prompt.
+3. **Tolerant mapping** v `routers/translate.py:_run_translation` — `r.get("czech") or r.get("text") or r.get("translation") or r.get("cs")` + warning logging kolik výsledků mělo nestandardní klíč. Defenzivně zachytí, kdyby zpřísnění promptu selhalo.
+
+**Verifikace fix v3:** 120 elementů přeloženo, 5 batchů, žádný recovery branch nepoužit, žádná halucinace klíče.
+
+**Generální princip — sanitize symetrie:** Všude, kde JSON přechází mezi systémy (Illustrator↔Python, Claude↔Python, frontend↔backend), je třeba mít stejnou kvalitu sanitize na **obou stranách**. Cleanup v `text_extractor.py` byl implementovaný proaktivně, v `translation_service.py` chyběl — protože dlouho neselhal. Mapa s vysokým podílem víceřádkového vstupu byla první trigger.
+
+**Soubory:**
+- `backend/services/translation_service.py:345-380` — `_escape_control_chars_in_strings` helper
+- `backend/services/translation_service.py:520-540` — strategie parsování (try → escape → fix quotes → raise)
+- `backend/services/translation_service.py:463,478` — vstupní klíč `en` + explicitní prompt
+- `backend/routers/translate.py:155-180` — tolerantní mapping s warning logging
+
+---
+
 ## 2026-04-18 — Glossary Enforcer: post-LLM DB substituce (P0 z audit TASK)
 
 **Kontext:** Audit `docs/TASK_term_verification_audit.md` odhalil, že `termdb.db` (246K+) byla v překladu jen **soft hint** v systém promptu. LLM mohl přepsat kanonické názvy vlastními (pattern co selhal v NG-ROBOT: "lesňáček cerulea" místo "lesňáček modropláštíkový").

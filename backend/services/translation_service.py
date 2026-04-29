@@ -174,10 +174,72 @@ Elementy jsou KRÁTKÉ — typicky 1–15 slov: popisky map, nadpisy, legendy, d
 - ZAKÁZÁNO překládat tyto termíny vlastními slovy, synonymem nebo parafrází.
 - Pokud glosář uvádí jiný překlad než se zdá logický: NÁSLEDUJ glosář, ne svůj odhad.
 
-## ZEMĚPISNÉ NÁZVY
-- Zavedené české exonymy: Germany→Německo, Vienna→Vídeň, Mediterranean Sea→Středozemní moře
-- Města: London→Londýn, Paris→Paříž, Rome→Řím, Moscow→Moskva, Prague→Praha
-- Bez českého ekvivalentu ponech beze změny: Reykjavík, Nuuk, Brattahlíð
+## ZEMĚPISNÉ NÁZVY — TVRDÁ PRAVIDLA
+
+### Pravidlo 1: Generický prvek se VŽDY překládá
+Tabulka generik (povinné překlady, NIKDY neponecháváš v angličtině):
+| EN | CZ |
+|---|---|
+| Lake | jezero |
+| Arm / Sound / Bay / Inlet / Cove | záliv (zátoka u malých) |
+| Mountains / Range | pohoří |
+| Mount / Mt. | hora |
+| River / R. | řeka |
+| Creek / Stream / Brook | potok |
+| Highway / Hwy | dálnice (interstate) |
+| Road / Rd. / Street / St. | silnice |
+| Passage / Strait | průliv |
+| Channel | průliv (mořský) / kanál (umělý) |
+| Canal | průplav |
+| Glacier | ledovec |
+| Pass | sedlo / průsmyk |
+| Ocean | oceán |
+| Sea | moře |
+| Cape | mys |
+| Peninsula | poloostrov |
+| Island / Isle | ostrov |
+| Falls | vodopád / vodopády |
+| Valley | údolí |
+| Plateau | plošina |
+| National Park | národní park |
+
+### Pravidlo 2: Vlastní jméno se NEPŘEKLÁDÁ
+Slova jako Index, Barry, Knik, Glenn, Glacier (jako vlastní jméno), Chugach, Prince William zůstávají v originále. Diakritiku zachovej u zavedených tvarů (Reykjavík, Brattahlíð).
+
+### Pravidlo 3: Pořadí — generikum PŘED vlastním jménem
+EN: `[Vlastní] [generikum]` → CZ: `[generikum] [Vlastní]`
+
+Závazné příklady:
+- Index Lake → jezero Index
+- Barry Arm → záliv Barry (NIKDY ne „Barry Arm" v české mapě)
+- Knik Arm → záliv Knik
+- Turnagain Arm → záliv Turnagain
+- Prince William Sound → záliv Prince William
+- Chugach Mountains → pohoří Chugach
+- Esther Passage → průliv Esther
+- Passage Canal → průplav Passage
+- Glenn Highway → dálnice Glenn (NIKDY ne „Glenn Highway")
+- Seward Highway → dálnice Seward
+- Pacific Ocean → Tichý oceán (zavedené exonymum)
+- Arctic Ocean → Severní ledový oceán
+
+### Pravidlo 4: Skloňování s předložkou
+S českou předložkou se skloňuje POUZE generikum, vlastní jméno zůstává v 1. pádě.
+- „to Prince William Sound" → „k zálivu Prince William" (NE „Ke Prince William Sound")
+- „from Knik Arm" → „ze zálivu Knik"
+- „across Glenn Highway" → „přes dálnici Glenn"
+
+### Pravidlo 5: Sídla — výjimka, NEPŘEKLÁDAJÍ se
+Sídla (města, vesnice, kempy, body zájmu jako proper noun) zůstávají v originále:
+- Glacier View → Glacier View
+- Victory Bible Camp → Victory Bible Camp
+- Anchorage → Anchorage
+- New York → New York
+
+Výjimka: zavedená historická exonyma (London → Londýn, Vienna → Vídeň, Moscow → Moskva, Prague → Praha)
+
+### Pravidlo 6: Konzistence v rámci dokumentu
+Pokud se stejný název objeví víckrát (např. „Barry Arm" v několika vrstvách mapy), MUSÍŠ použít stejný překlad pokaždé. Žádné výjimky.
 
 ## ZKRATKY STÁTŮ
 - U.K.→VB, GER.→NĚM., SPA.→ŠPA., GRE.→ŘEC., SWI.→ŠVÝ., AUT.→RAK.
@@ -210,6 +272,11 @@ Elementy jsou KRÁTKÉ — typicky 1–15 slov: popisky map, nadpisy, legendy, d
 - Zachovej velká písmena (ALL CAPS) pokud jsou v originále — jde o layout
 - Zachovej zkratky a odbornou terminologii (geologie, biologie, geografie)
 - Diakritika vždy správně
+
+## ABECEDA — KRITICKÉ
+- Výstup MUSÍ být VÝHRADNĚ v latince s českou diakritikou (a–z, á, č, ď, é, ě, í, ň, ó, ř, š, ť, ú, ů, ý, ž a velké varianty).
+- ZAKÁZÁNO používat cyrilici (а, е, о, р, с, у, х, ы, и, й, А, В, Е, ...) — i když vypadá vizuálně stejně jako latinka, je to chyba. Příklad: "sesuvy" (správně, latinské `y`) vs "sesuvы" (CHYBA, cyrilské `ы` U+044B).
+- Když si nejsi jistý, použij ASCII přepis (`y`, `i`, `j`) místo cyrilického znaku.
 
 ## VÝSTUP
 Vrať JSON pole objektů: [{"id": "...", "czech": "..."}]
@@ -298,6 +365,27 @@ def translate_batch(
         results = _translate_api_call(collector, batch, project_type, model, backgrounder)
         all_results.extend(results)
 
+    # CyrillicGuard — Claude obcas haluje cyrilici v ceskych prekladech
+    # (pozorovany pripad: "sesuvы" misto "sesuvy"). Deterministicky nahradi
+    # vizualne identicke homoglyphy latinkou.
+    cyrillic_total = 0
+    unmapped_total = []
+    for r in all_results:
+        cz = r.get("czech")
+        if cz:
+            fixed, n, unmapped = _strip_cyrillic_homoglyphs(cz)
+            if n > 0:
+                r["czech"] = fixed
+                cyrillic_total += n
+                logger.debug("CyrillicGuard fix [%s]: %r -> %r", r.get("id"), cz, fixed)
+            if unmapped:
+                unmapped_total.extend((r.get("id"), c) for c in unmapped)
+    if cyrillic_total:
+        logger.warning("CyrillicGuard: %d homoglyphu nahrazeno latinkou", cyrillic_total)
+    if unmapped_total:
+        logger.warning("CyrillicGuard: %d cyrilskych znaku bez mappingu (manualni revize): %s",
+                       len(unmapped_total), unmapped_total[:5])
+
     # Glossary enforcer — post-LLM DB substituce (kanonické názvy z termdb.db)
     try:
         from services.glossary_enforcer import enforce_glossary_on_results
@@ -340,6 +428,109 @@ def _append_glossary_fixes_report(project_id: str, fixes: list[dict]) -> None:
         )
     except Exception as e:
         logger.warning("Nelze uložit glossary_fixes.json: %s", e)
+
+
+# === CyrillicGuard: deterministicky strip cyrilskych homoglyphu ===
+#
+# Claude obcas haluje cyrilici v ceskem prekladu (typicky u slov podobnych
+# rustine — "sesuvы" misto "sesuvy", U+044B misto U+0079). Cestina cyrilici
+# nepouziva, takze jakykoliv cyrilsky znak v prekladu = chyba.
+#
+# Mapping pokryva vizualne identicke nebo skoro identicke znaky. Cyrilice
+# bez mappingu (typicky cisty rusky znak) se necha a logujeme warning —
+# editor je ukaze, uzivatel resi manualne.
+_CYRILLIC_TO_LATIN = {
+    # Lowercase — vizualne identicke / skoro identicke s latinkou
+    "а": "a",  # U+0430
+    "е": "e",  # U+0435
+    "о": "o",  # U+043E
+    "р": "p",  # U+0440
+    "с": "c",  # U+0441
+    "у": "y",  # U+0443
+    "х": "x",  # U+0445
+    "і": "i",  # U+0456
+    "ј": "j",  # U+0458
+    "ѕ": "s",  # U+0455
+    # Lowercase — nejsou identicke, ale Claude je casto haluje
+    # (pozorovane pripady: "sesuvы"→"sesuvy", "нить myšlenky"→"nit myšlenky")
+    "ы": "y",  # U+044B (yeru)
+    "и": "i",  # U+0438
+    "й": "j",  # U+0439
+    "н": "n",  # U+043D — H-shape v lowercase, Claude haluje pro n
+    "т": "t",  # U+0442 — T-shape
+    "к": "k",  # U+043A
+    "м": "m",  # U+043C
+    # Mekky/tvrdy znak — v cestine bez vyznamu, vyhodit
+    "ь": "",  # U+044C (myagkiy znak)
+    "ъ": "",  # U+044A (tvyordyy znak)
+    # Uppercase — vizualne identicke / skoro identicke
+    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H",
+    "О": "O", "Р": "P", "С": "C", "Т": "T", "У": "Y", "Х": "X",
+    "І": "I", "Ј": "J", "Ѕ": "S",
+    "Ы": "Y", "И": "I", "Й": "J",
+}
+
+
+def _strip_cyrillic_homoglyphs(text: str) -> tuple[str, int, list[str]]:
+    """Nahradi cyrilske homoglyphy latinkou.
+
+    Returns:
+        (fixed_text, num_replaced, unmapped_chars)
+        unmapped_chars = cyrilske znaky, ktere mapping neumi resit (logujeme warning).
+    """
+    if not text:
+        return text, 0, []
+    out = []
+    replaced = 0
+    unmapped = []
+    for ch in text:
+        if ch in _CYRILLIC_TO_LATIN:
+            out.append(_CYRILLIC_TO_LATIN[ch])
+            replaced += 1
+        elif 0x0400 <= ord(ch) <= 0x04FF:
+            # Cyrilice bez mappingu — necham
+            out.append(ch)
+            unmapped.append(ch)
+        else:
+            out.append(ch)
+    return "".join(out), replaced, unmapped
+
+
+def _escape_control_chars_in_strings(text: str) -> str:
+    """Escapuje raw control chars (LF, CR, TAB...) JEN uvnitr JSON stringu.
+
+    JSON spec (RFC 8259):
+    - Whitespace mezi tokens (mimo string): LF, CR, TAB, space jsou OK.
+    - Uvnitr stringu: control chars musi byt escapovane (\\n, \\r, \\t, \\uXXXX).
+
+    Claude obcas vraci raw LF uvnitr stringu pri prekladu viceradkoveho vstupu
+    (napr. vstup "Direction" + LF + "of View" → preklad "Smer" + LF + "pohledu").
+    Tento helper opravi pouze tyto chyby a ponecha strukturalni whitespace.
+    """
+    out = []
+    in_string = False
+    escape_next = False
+    for ch in text:
+        if escape_next:
+            out.append(ch)
+            escape_next = False
+            continue
+        if in_string:
+            if ch == "\\":
+                out.append(ch)
+                escape_next = True
+            elif ch == '"':
+                out.append(ch)
+                in_string = False
+            elif ord(ch) < 0x20:
+                out.append(f"\\u{ord(ch):04x}")
+            else:
+                out.append(ch)
+        else:
+            if ch == '"':
+                in_string = True
+            out.append(ch)
+    return "".join(out)
 
 
 def _fix_unescaped_quotes(text: str) -> str:
@@ -421,9 +612,11 @@ def _translate_api_call(
     from core.engine import resolve_model
 
     # Sestavit user prompt
+    # Vstupni klic je "en" (ne "text") aby Claude nezachoval stejny klic ve vystupu —
+    # opakovane halucinoval [{"id": "...", "text": "<preklad>"}] misto "czech".
     items = []
     for el in elements:
-        item = {"id": el.id, "text": el.contents}
+        item = {"id": el.id, "en": el.contents}
         if el.category:
             item["category"] = el.category
         if el.paragraph_style:
@@ -437,6 +630,9 @@ def _translate_api_call(
 
     user_msg = (
         f"Přelož následující texty z {context} do češtiny.\n\n"
+        f"VSTUP používá klíč `en` (anglický originál). "
+        f"VÝSTUP MUSÍ používat klíč `czech` (český překlad). "
+        f"Vrať: `[{{\"id\": \"...\", \"czech\": \"...\"}}]` — nikdy `text`, `en` ani `translation`.\n\n"
         f"```json\n{json.dumps(items, ensure_ascii=False, indent=2)}\n```"
     )
 
@@ -484,22 +680,28 @@ def _translate_api_call(
 
     text = raw[start:end + 1]
 
-    # Sanitize Unicode control chars
+    # Sanitize Unicode line/paragraph separators (vne i uvnitr stringu)
     text = text.replace("\u2028", " ").replace("\u2029", " ")
 
     try:
         results = json.loads(text)
     except json.JSONDecodeError:
-        # Claude obcas pouzije neescapovane " uvnitr JSON stringu.
-        # Opravime: najdeme vsechny " co nejsou JSON strukturalni
-        # a nahradime je za typograficke uvozovky.
-        fixed = _fix_unescaped_quotes(text)
+        # Recovery 1: raw control chars uvnitr JSON stringu
+        # (typicky pri prekladu viceradkoveho vstupu "Direction" + LF + "of View")
+        text2 = _escape_control_chars_in_strings(text)
         try:
-            results = json.loads(fixed)
-            logger.warning("JSON parse uspel az po oprave uvozovek")
-        except json.JSONDecodeError as exc:
-            logger.error("Neplatny JSON (len=%d): %s", len(text), exc)
-            raise ValueError(f"Claude API vratil neplatny JSON: {text[:200]}...")
+            results = json.loads(text2)
+            if text2 != text:
+                logger.warning("JSON parse uspel az po escape control chars v stringu")
+        except json.JSONDecodeError:
+            # Recovery 2: neescapovane uvozovky uvnitr JSON stringu
+            fixed = _fix_unescaped_quotes(text2)
+            try:
+                results = json.loads(fixed)
+                logger.warning("JSON parse uspel az po oprave uvozovek")
+            except json.JSONDecodeError as exc:
+                logger.error("Neplatny JSON (len=%d): %s", len(text), exc)
+                raise ValueError(f"Claude API vratil neplatny JSON: {text[:200]}...")
 
     if not isinstance(results, list):
         raise ValueError(f"Ocekavan JSON pole, dostal: {type(results)}")

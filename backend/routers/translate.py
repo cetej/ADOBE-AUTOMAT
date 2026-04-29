@@ -154,7 +154,30 @@ def _run_translation(project_id, elements, project_type, model, backgrounder, ov
 
         # Aplikovat preklady
         project = get_project(project_id)
-        result_map = {r["id"]: r["czech"] for r in results}
+        # Tolerantni mapping — Claude obcas vrati "text" misto "czech"
+        # (zachovava klic z input formatu). Logujeme, kolik prekladu zacervilo.
+        result_map = {}
+        skipped_no_value = 0
+        wrong_key_count = 0
+        for r in results:
+            rid = r.get("id")
+            if not rid:
+                continue
+            cz = r.get("czech")
+            if cz is None:
+                cz = r.get("text") or r.get("translation") or r.get("cs")
+                if cz is not None:
+                    wrong_key_count += 1
+            if cz is None:
+                skipped_no_value += 1
+                continue
+            result_map[rid] = cz
+        if wrong_key_count:
+            logger.warning("Preklad: %d vysledku melo nestandardni klic (text/translation/cs misto czech)",
+                           wrong_key_count)
+        if skipped_no_value:
+            logger.warning("Preklad: %d vysledku bez hodnoty (chybeji vsechny varianty klice)",
+                           skipped_no_value)
         applied = 0
         for elem in project.elements:
             if elem.id in result_map:

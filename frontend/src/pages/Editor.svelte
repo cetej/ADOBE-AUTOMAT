@@ -6,6 +6,35 @@
   import FilterToolbar from '../components/FilterToolbar.svelte';
   import StatsPanel from '../components/StatsPanel.svelte';
 
+  // Interpretace raw error message z backendu na actionable hlasku.
+  // Backend obcas vrati str(KeyError) jako jen "'czech'" nebo str(JSONDecodeError) — uzivatel
+  // si je interpretuje jako "spatny API klic". Tady mapujeme na konkretni signal.
+  function interpretTranslateError(rawError) {
+    if (!rawError) return 'Chyba prekladu: neznama';
+    const e = String(rawError).trim();
+    // KeyError: 'czech' / 'text' / 'translation' — Claude vratil JSON s nestandardnim klicem
+    if (/^['"]?(czech|text|translation|cs|en)['"]?$/i.test(e)) {
+      return `Claude vratil JSON s nestandardnim klicem (${e}). Backend by to mel zachytit tolerant mappingem — pokud vidis tuto hlasku, pridej dalsi alias do routers/translate.py.`;
+    }
+    // JSON parsing
+    if (/Neplatny JSON|Invalid control|Expecting value|JSONDecodeError|JSON pole/i.test(e)) {
+      return `Chyba parsovani odpovedi z Claude API (raw control chars / unescaped quotes). Detail: ${e.slice(0, 120)}`;
+    }
+    // API auth
+    if (/api[_ -]?key|unauthorized|401|authentication|invalid.*key/i.test(e)) {
+      return `Chyba autorizace Claude API — overte ANTHROPIC_API_KEY v .env. Detail: ${e.slice(0, 120)}`;
+    }
+    // Connection / timeout
+    if (/timeout|timed out|connection.*refused|connection.*reset/i.test(e)) {
+      return `Spojeni s Claude API selhalo (timeout/connection). Detail: ${e.slice(0, 120)}`;
+    }
+    // Rate limit
+    if (/rate.?limit|429|too many requests/i.test(e)) {
+      return `Claude API rate limit — pockejte chvili a zkuste znovu. Detail: ${e.slice(0, 120)}`;
+    }
+    return `Chyba prekladu: ${e}`;
+  }
+
   let search = $state('');
   let filterLayer = $state('');
   let filterCategory = $state('');
@@ -133,7 +162,7 @@
       translateHasBackgrounder = startResult.has_backgrounder || false;
       await _pollTranslateProgress();
     } catch (e) {
-      notify('Chyba prekladu: ' + e.message, 'error');
+      notify(interpretTranslateError(e.message), 'error');
       translating = false;
       translateProgress = '';
     }
@@ -159,7 +188,7 @@
       translateHasBackgrounder = startResult.has_backgrounder || false;
       await _pollTranslateProgress();
     } catch (e) {
-      notify('Chyba prekladu: ' + e.message, 'error');
+      notify(interpretTranslateError(e.message), 'error');
       translating = false;
       translateProgress = '';
     }
@@ -190,7 +219,7 @@
           translateProgress = '';
           return;
         } else if (p.status === 'error') {
-          notify('Chyba prekladu: ' + (p.error || 'neznama'), 'error');
+          notify(interpretTranslateError(p.error), 'error');
           translating = false;
           translateProgress = '';
           return;
@@ -200,7 +229,7 @@
           return;
         }
       } catch (e) {
-        notify('Chyba polling: ' + e.message, 'error');
+        notify('Chyba pri polling progresu prekladu: ' + e.message, 'error');
         translating = false;
         translateProgress = '';
         return;
