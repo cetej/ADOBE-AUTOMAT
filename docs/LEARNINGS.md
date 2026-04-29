@@ -4,6 +4,48 @@ Poučení z vývoje. Nejnovější záznamy nahoře.
 
 ---
 
+## 2026-04-30 — Cross-batch konzistence v překladu: pre-deduplikace v `translate_batch`
+
+**Kontext:** Pravidlo č. 6 v `SYSTEM_PROMPT` říká „stejný EN → stejný CZ napříč dokumentem", ale Claude ho **nedrží napříč batchy**. Migration mapa (131 elementů, 6 batchů) měla 3 elementy se stejným EN `COMMON WET SEASON RANGE`, ale 2 různé CZ překlady — protože každý batch je samostatné API volání bez paměti.
+
+**Pravidlo v promptu nestačí, když architektura porušuje invariant.** Claude může číst pravidlo a chtít ho dodržovat, ale nemá data — předchozí batche nevidí.
+
+**Řešení:** pre-deduplikace v `translate_batch()` — místo posílat všech N elementů, skupinujeme podle `el.contents` a posíláme jen unikátní reprezentanty. Po API volání rozšíříme výsledek na všechny duplicates ve skupině.
+
+**Architektura:**
+```python
+en_groups = OrderedDict()
+for el in to_translate:
+    en_groups.setdefault(el.contents, []).append(el)
+
+unique_to_translate = [grp[0] for grp in en_groups.values()]
+# ... API call jen na unique ...
+for grp in en_groups.values():
+    cz = rep_id_to_cz.get(grp[0].id)
+    for el in grp:
+        all_results.append({"id": el.id, "czech": cz})
+```
+
+**Empirický výsledek (Migration retranslate):**
+- Před: `total_batches=6`, 3 elementy se 2 různými CZ
+- Po: `total_batches=4` (33 % úspora API volání), 0 mismatched EN→CZ párů
+
+**Generální princip:** invariant „konzistence napříč více volání" musí být zaručen **strukturou kódu**, ne instrukcí v promptu. Pokud LLM nemá kontext, nemůže rozhodnout konzistentně.
+
+**Lekce pro budoucí pipeline:** pokaždé, když máš v promptu pravidlo typu „buď konzistentní s/zachovej napříč X", zeptej se: má model k tomu data? Pokud ne, oprav strukturu, ne prompt.
+
+**Soubory:**
+- `backend/services/translation_service.py:translate_batch` — pre-deduplikace + expanze výsledku
+- `backend/scripts/audit_maps.py` — heuristický audit pro detekci inkonzistencí
+- `backend/scripts/retranslate_batch.py` — paralelní retranslate více map
+
+**Empirické výsledky napříč 8 mapami (2 retranslate iterace + manuální cleanup):**
+- INCONSISTENT: 25 → **0** (-100 %)
+- CAPS: 63 → **22** (-65 %, zbytek vše FP — vlastní jména / ALL CAPS / věty)
+- 35 manuálních fixů (předložky, kapitalizace popisků, halucinace `Aralqum`, kanonizace terminologie)
+
+---
+
 ## 2026-04-29 — Geografické názvy: prompt-level pravidla pro konzistenci
 
 **Kontext:** Po fix cyrilice se v Alaska mapě objevila další třída chyb — nekonzistentní překlad geografických názvů. Stejný term `Barry Arm` byl ve dvou vrstvách jednou `záliv Barry`, podruhé `Barry Arm`. `Glenn Highway`, `Seward Highway` zůstávaly v angličtině. „To Prince William Sound" → „Ke Prince William Sound" (předložka „ke" + 1. pád = nesmysl).

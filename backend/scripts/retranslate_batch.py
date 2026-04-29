@@ -12,8 +12,11 @@ BASE = "http://127.0.0.1:8100"
 PROJECTS = [
     "lostvikings-m2-v3-final-fp-metric",
     "ngm-indus-valley-civilization-map-v6-final-fp-1",
-    "migration-m4-final-fp-metric",
     "aral-sea-map-test",
+    "ngm-2605-barryarm-v8-final2-fp",
+    "ngm-byzantine-empire-ad-717-map-cz2",
+    "girlions-m1-final-fp-1",
+    "ngm-okavango-expeditions-map-v8-final-metric",
 ]
 
 

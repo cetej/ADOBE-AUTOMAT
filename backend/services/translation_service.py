@@ -394,12 +394,28 @@ def translate_batch(
     if from_memory:
         logger.info("Translation memory: %d/%d z cache", len(from_memory), len(elements))
 
-    total_batches = max(1, (len(to_translate) + max_batch - 1) // max_batch) if to_translate else 0
+    # Pre-deduplikace: skupinujeme elementy se stejnym EN textem.
+    # Claude nevidi predchozi batche, takze stejny EN by mohl byt prelozen
+    # ruzne v ruznych batchich (pozorovano: "COMMON WET SEASON RANGE" v Migration
+    # mape mela 2 ruzne CZ pres 3 elementy). Posleme kazdy unikat 1× a aplikujeme
+    # vysledek na vsechny duplicates.
+    from collections import OrderedDict
+    en_groups: OrderedDict[str, list] = OrderedDict()
+    for el in to_translate:
+        key = el.contents  # case-sensitive, whitespace zachovan
+        en_groups.setdefault(key, []).append(el)
+    unique_to_translate = [grp[0] for grp in en_groups.values()]
+    duplicates_saved = len(to_translate) - len(unique_to_translate)
+    if duplicates_saved > 0:
+        logger.info("Dedup: %d unikatnich EN z %d elementu (uspora %d API volani)",
+                    len(unique_to_translate), len(to_translate), duplicates_saved)
+
+    total_batches = max(1, (len(unique_to_translate) + max_batch - 1) // max_batch) if unique_to_translate else 0
 
     if progress_callback:
         progress_callback(0, total_batches, len(from_memory))
 
-    if not to_translate:
+    if not unique_to_translate:
         return from_memory
 
     # Engine s trace sledováním
@@ -408,17 +424,34 @@ def translate_batch(
 
     engine = get_engine()
     collector = TraceCollector(engine, get_trace_store(), module="translation")
-    all_results = list(from_memory)
+    unique_results = []  # preklady reprezentantu (id z prvniho el. v kazde skupine)
 
-    for i in range(0, len(to_translate), max_batch):
+    for i in range(0, len(unique_to_translate), max_batch):
         batch_num = i // max_batch + 1
-        batch = to_translate[i:i + max_batch]
+        batch = unique_to_translate[i:i + max_batch]
 
         if progress_callback:
             progress_callback(batch_num, total_batches, len(from_memory))
 
         results = _translate_api_call(collector, batch, project_type, model, backgrounder)
-        all_results.extend(results)
+        unique_results.extend(results)
+
+    # Expanze: aplikovat preklad reprezentanta na vsechny duplicates ve skupine
+    rep_id_to_cz: dict[str, str] = {}
+    for r in unique_results:
+        rid = r.get("id")
+        cz = r.get("czech") or r.get("text") or r.get("translation") or r.get("cs")
+        if rid and cz is not None:
+            rep_id_to_cz[rid] = cz
+
+    all_results = list(from_memory)
+    for grp in en_groups.values():
+        rep_id = grp[0].id
+        cz = rep_id_to_cz.get(rep_id)
+        if cz is None:
+            continue  # reprezentant nemel preklad, duplicates taky preskocime
+        for el in grp:
+            all_results.append({"id": el.id, "czech": cz})
 
     # CyrillicGuard — Claude obcas haluje cyrilici v ceskych prekladech
     # (pozorovany pripad: "sesuvы" misto "sesuvy"). Deterministicky nahradi
