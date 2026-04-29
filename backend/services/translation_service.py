@@ -258,20 +258,75 @@ Pokud se stejný název objeví víckrát (např. „Barry Arm" v několika vrst
 - Jednotky: 5 km, 3 °C (mezera před jednotkou)
 - Nedělitelná mezera za jednopísmennými předložkami: k, s, v, z, o, u
 
-## FALSE FRIENDS
-| EN | Špatně | Správně |
+## FALSE FRIENDS A IDIOMY
+| EN | Špatně (doslovně) | Správně (idiomaticky) |
 |---|---|---|
 | billion | bilion | miliarda |
 | evidence | evidence | důkazy, doklady |
 | actual/actually | aktuální/aktuálně | skutečný/ve skutečnosti |
 | eventually | eventuálně | nakonec |
 | dramatic (change) | dramatický | výrazný, zásadní |
+| **of interest** | **zájmu / zájmový** | **sledovaný / kritický / vyznačený** |
+| of concern | zájmu/obavy | znepokojující / sledovaný |
+| of note | poznámky | významný / pozoruhodný |
+| in question | v otázce | dotyčný / sledovaný |
+| at hand | po ruce | aktuální / dotyčný |
+
+POZOR na `landslide of interest`: NE „sesuv zájmu"; ANO „sledovaný sesuv".
+
+## ODBORNÉ TERMÍNY — geologie a přírodní rizika
+Tato doména v TermDB chybí, dodržuj následující kanonické překlady:
+
+| EN | CZ |
+|---|---|
+| **deep-seated landslide** | **hlubinný sesuv** (preferováno) / hluboko založený sesuv |
+| shallow landslide | mělký sesuv |
+| active landslide | aktivní sesuv |
+| earlier / former landslide | starší sesuv |
+| **landslide of interest** | **sledovaný / zkoumaný sesuv** (NE „sesuv zájmu") |
+| rock fall / rockfall | skalní řícení |
+| debris flow | proudový sesuv / mura |
+| tsunami arrival time | čas příchodu tsunami |
+| permafrost (thawing/active) | (tající/aktivní) permafrost |
+| glacier retreat | ústup ledovce |
+| ice-marginal | okraj ledovce / okrajový (k ledovci) |
+| moraine | moréna |
+| bedrock | skalní podloží |
+
+**Příklad celé fráze:** `Deep-seated landslide of interest` → `Zkoumaný hlubinný sesuv` (nebo `Sledovaný hlubinný sesuv`).
 
 ## STYL
-- Přirozená čeština — ne doslovný překlad
-- Zachovej velká písmena (ALL CAPS) pokud jsou v originále — jde o layout
-- Zachovej zkratky a odbornou terminologii (geologie, biologie, geografie)
-- Diakritika vždy správně
+- **Hlavní cíl: český čtenář musí rozumět.** Doslovný překlad bez pochopení kontextu = chyba, i když je gramaticky správný.
+- Přirozená čeština, ne doslovný překlad.
+- Zachovej zkratky a odbornou terminologii (geologie, biologie, geografie).
+- Diakritika vždy správně.
+
+## KAPITALIZACE — ZÁVISÍ NA TYPU TEXTU
+České typografické pravidlo se v anglických mapových popiscích NEPOUŽÍVÁ (angličtina dává Title Case na popisky, čeština ne). Důsledně rozliš:
+
+### Popisek (ne věta, ne titulek) — malé počáteční písmeno
+Popisek = krátká fráze na mapě, bez tečky, není to věta ani název objektu jako celek.
+Velká písmena POUZE u vlastních jmen.
+
+| EN (Title Case) | CZ správně | CZ špatně |
+|---|---|---|
+| Direction of View | směr pohledu | ~~Směr pohledu~~ |
+| Active landslides | aktivní sesuvy | ~~Aktivní sesuvy~~ |
+| Deep-seated landslide | hlubinný sesuv | ~~Hlubinný sesuv~~ |
+| Earlier landslide | starší sesuv | ~~Starší sesuv~~ |
+| Thawing permafrost | tající permafrost | ~~Tající permafrost~~ |
+| Other landslide with tsunami potential | jiný sesuv s potenciálem tsunami | ~~Jiný sesuv...~~ |
+| Passenger ship traffic | provoz osobních lodí | ~~Provoz osobních lodí~~ |
+
+### Titulek / nadpis sekce — velké počáteční písmeno
+| Key | Legenda |
+| LEGEND | LEGENDA |
+
+### Vlastní jména — vždy velké
+Glacier View, Glenn Highway → dálnice Glenn (vlastní jméno), Barry Arm → záliv Barry.
+
+### Celé věty (s tečkou nebo plnou syntaktickou strukturou) — velké počáteční písmeno
+„Sledování probíhá od roku 2020." (věta s tečkou) — velké S.
 
 ## ABECEDA — KRITICKÉ
 - Výstup MUSÍ být VÝHRADNĚ v latince s českou diakritikou (a–z, á, č, ď, é, ě, í, ň, ó, ř, š, ť, ú, ů, ý, ž a velké varianty).
